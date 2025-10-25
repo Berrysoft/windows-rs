@@ -23,6 +23,7 @@ pub struct Config<'a> {
     pub sys_fn_ptrs: bool,
     pub sys_fn_extern: bool,
     pub implement: bool,
+    pub overrides: bool,
     pub specific_deps: bool,
     pub derive: &'a Derive,
     pub link: &'a str,

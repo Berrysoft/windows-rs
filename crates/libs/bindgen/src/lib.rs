@@ -325,6 +325,7 @@ where
     let mut no_toml = false;
     let mut package = false;
     let mut implement = false;
+    let mut overrides = false;
     let mut specific_deps = false;
     let mut rustfmt = String::new();
     let mut output = String::new();
@@ -357,6 +358,7 @@ where
                 "--sys-fn-ptrs" => sys_fn_ptrs = true,
                 "--sys-fn-extern" => sys_fn_extern = true,
                 "--implement" => implement = true,
+                "--overrides" => overrides = true,
                 "--specific-deps" => specific_deps = true,
                 "--link" => kind = ArgKind::Link,
                 "--index" => index = true,
@@ -493,6 +495,7 @@ where
         sys_fn_ptrs,
         sys_fn_extern,
         implement,
+        overrides,
         specific_deps,
         link: &link,
         warnings: &warnings,
