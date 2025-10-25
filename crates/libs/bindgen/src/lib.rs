@@ -362,6 +362,9 @@ where
                 "--implement" => {
                     builder.implement();
                 }
+                "--overrides" => {
+                    builder.overrides();
+                }
                 "--specific-deps" => {
                     builder.specific_deps();
                 }
@@ -439,6 +442,7 @@ pub struct Bindgen {
     no_toml: bool,
     package: bool,
     implement: bool,
+    overrides: bool,
     specific_deps: bool,
     sys: bool,
     typedef: bool,
@@ -589,6 +593,12 @@ impl Bindgen {
     /// Include implementation traits for WinRT interfaces.
     pub fn implement(&mut self) -> &mut Self {
         self.implement = true;
+        self
+    }
+
+    /// Generate override classes for WinRT interfaces.
+    pub fn overrides(&mut self) -> &mut Self {
+        self.overrides = true;
         self
     }
 
@@ -771,6 +781,7 @@ impl Bindgen {
             sys_fn_ptrs: self.sys_fn_ptrs,
             sys_fn_extern: self.sys_fn_extern,
             implement: self.implement,
+            overrides: self.overrides,
             specific_deps: self.specific_deps,
             link,
             warnings: &warnings,
