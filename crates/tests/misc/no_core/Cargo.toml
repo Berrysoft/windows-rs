@@ -18,7 +18,7 @@ path = "../../../libs/strings"
 workspace = true
 
 [build-dependencies.windows-bindgen]
-path = "../../../libs/bindgen"
+workspace = true
 
 [lints]
 workspace = true
