@@ -856,7 +856,7 @@ impl Method {
                             }
                         } else {
                             quote! {
-                                where #(#other_constraints)* F: Fn #fn_sig_no_return + Send + 'static,
+                                where #(#other_constraints)* F: Fn #fn_sig_no_return -> windows_core::Result<()> + Send + 'static,
                             }
                         }
                     };
@@ -899,8 +899,7 @@ impl Method {
                         quote! {
                             #prelude
                             let #pname = <#delegate_name>::new(move |#(#invoke_arg_idents),*| {
-                                #pname(#(#invoke_arg_idents),*);
-                                Ok(())
+                                #pname(#(#invoke_arg_idents),*)
                             });
                         }
                     };
