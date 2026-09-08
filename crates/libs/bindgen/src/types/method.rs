@@ -855,8 +855,9 @@ impl Method {
                                 where #(#other_constraints)* F: Fn #fn_sig_no_return + 'static,
                             }
                         } else {
+                            let result = config.write_core();
                             quote! {
-                                where #(#other_constraints)* F: Fn #fn_sig_no_return -> windows_core::Result<()> + Send + 'static,
+                                where #(#other_constraints)* F: Fn #fn_sig_no_return -> #result Result<()> + Send + 'static,
                             }
                         }
                     };

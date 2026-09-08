@@ -377,6 +377,12 @@ impl CppMethod {
                             unsafe { (windows_core::Interface::vtable(self).#vname)(windows_core::Interface::as_raw(self), #args); }
                         }
                     }
+                } else if matches!(self.signature.return_type, Type::HRESULT) {
+                    quote! {
+                        #vis unsafe fn #name<#generics>(&self, #params) #abi_return_type #where_clause {
+                            unsafe { (windows_core::Interface::vtable(self).#vname)(windows_core::Interface::as_raw(self), #args).ok() }
+                        }
+                    }
                 } else {
                     quote! {
                         #vis unsafe fn #name<#generics>(&self, #params) #abi_return_type #where_clause {
@@ -802,6 +808,10 @@ impl CppMethod {
         match &self.signature.return_type {
             Type::Void if self.def.has_attribute("DoesNotReturnAttribute") => quote! {  -> ! },
             Type::Void => quote! {},
+            Type::HRESULT => {
+                let result = config.write_core();
+                quote! { -> #result Result<()> }
+            }
             ty => {
                 let ty = ty.write_default(config);
                 quote! { -> #ty }

@@ -292,7 +292,19 @@ impl CppFn {
                     }
                 }
             }
-            ReturnHint::ReturnStruct | ReturnHint::None | ReturnHint::HResult => {
+            ReturnHint::HResult => {
+                let where_clause = method.write_where(config, false);
+
+                quote! {
+                    #cfg
+                    #[inline]
+                    pub unsafe fn #name<#generics>(#params) #abi_return_type #where_clause {
+                        #link
+                        unsafe { #name(#args).ok() }
+                    }
+                }
+            }
+            ReturnHint::ReturnStruct | ReturnHint::None => {
                 let where_clause = method.write_where(config, false);
 
                 quote! {
