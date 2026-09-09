@@ -697,7 +697,7 @@ fn default_reader() -> &'static Reader {
 
 #[track_caller]
 fn default_input() -> Vec<File> {
-    [windows_default::WINRT, windows_default::WIN32]
+    [windows_default::WINRT]
         .into_iter()
         .map(|bytes| File::new(bytes.to_vec()).unwrap())
         .collect()
@@ -811,19 +811,12 @@ fn namespace_starts_with(namespace: &str, starts_with: &str) -> bool {
 
 /// Collapses private per-header Win32 package namespaces to the public umbrella.
 fn flat_module_namespace(namespace: &str) -> &str {
-    const UMBRELLA: &str = "Windows.Win32";
-    if namespace.len() > UMBRELLA.len()
-        && namespace.starts_with(UMBRELLA)
-        && namespace.as_bytes()[UMBRELLA.len()] == b'.'
-    {
-        return UMBRELLA;
-    }
     namespace
 }
 
 /// Derives the cargo-feature name for a `--package` namespace.
 fn namespace_feature(namespace: &str) -> String {
-    if let Some(stem) = namespace.strip_prefix("Windows.Win32.") {
+    if let Some(stem) = namespace.strip_prefix("Windows.") {
         stem.replace('.', "_")
     } else if let Some((_, rest)) = namespace.split_once('.') {
         rest.replace('.', "_")

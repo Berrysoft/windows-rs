@@ -223,7 +223,8 @@ impl CppConst {
                 }
             }
         } else {
-            panic!()
+            // TODO
+            quote! {}
         }
     }
 }

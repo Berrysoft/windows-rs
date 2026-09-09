@@ -64,6 +64,7 @@ impl Cfg {
             if dependency.is_empty()
                 || namespace_starts_with(config.namespace, dependency)
                 || dependency == "Windows.Foundation"
+                || dependency == "Windows.Win32.Foundation"
                 || config.prunable.contains(dependency)
             {
                 continue;
@@ -216,14 +217,6 @@ impl Config<'_> {
             }
         }
 
-        let feature_namespaces: BTreeSet<&str> = trees
-            .iter()
-            .skip(1)
-            .map(|tree| tree.namespace)
-            .filter(|namespace| !prunable.contains(namespace))
-            .filter(|namespace| !is_flat_container(namespace))
-            .collect();
-
         // Sort feature lines by feature name for stable Cargo.toml output.
         let mut feature_lines: Vec<String> = Vec::new();
 
@@ -242,37 +235,15 @@ impl Config<'_> {
             // Dependencies follow namespace shape: Win32 peers, WinRT parent, or Foundation.
             let (parent, _leaf) = tree.namespace.rsplit_once('.').unwrap();
 
-            if parent == "Windows.Win32" {
-                // Win32 header features depend on the other header stems their APIs reference.
-                let config = self.with_namespace(tree.namespace);
-                let mut dependencies = BTreeSet::new();
-
-                for ty in &tree.types {
-                    let cfg = Cfg::new(&ty.dependencies(config.reader), &config);
-                    dependencies.extend(cfg.features);
-                }
-
-                dependencies.remove(tree.namespace);
-
-                // Sort dependencies by emitted feature name.
-                let list = dependencies
-                    .iter()
-                    .filter(|namespace| feature_namespaces.contains(*namespace))
-                    .map(|namespace| namespace_feature(namespace))
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .map(|feature| format!("\"{feature}\""))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                feature_lines.push(format!("{feature} = [{list}]"));
-            } else if parent != "Windows" {
+            if parent != "Windows" {
                 // Nested WinRT namespaces depend on their parent root feature.
                 let dependency = namespace_feature(parent);
 
                 feature_lines.push(format!("{feature} = [\"{dependency}\"]"));
             } else if tree.namespace == "Windows.Foundation" {
                 feature_lines.push(format!("{feature} = []"));
+            } else if tree.namespace == "Windows.Win32" || tree.namespace == "Windows.Wdk" {
+                feature_lines.push(format!("{feature} = [\"Win32_Foundation\"]"));
             } else {
                 feature_lines.push(format!("{feature} = [\"Foundation\"]"));
             }
@@ -314,7 +285,8 @@ impl Config<'_> {
 
 /// Always-present umbrella module for flat Win32 header stems.
 fn is_flat_container(namespace: &str) -> bool {
-    namespace == "Windows.Win32"
+    let _ = namespace;
+    false
 }
 
 /// Prelude item shadowed by a flat Win32/WDK free constant, if any.

@@ -275,6 +275,7 @@ impl Type {
                 "BOOL" => return Remap::Type(Self::BOOL),
                 "NTSTATUS" => return Remap::Type(Self::NTSTATUS),
                 "RPC_STATUS" => return Remap::Type(Self::RPC_STATUS),
+                "BOOLEAN" => return Remap::Type(Self::Bool),
                 "EventRegistrationToken" => return Remap::Type(Self::I64),
                 _ => {}
             }
