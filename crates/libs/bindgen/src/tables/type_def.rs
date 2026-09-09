@@ -28,11 +28,12 @@ impl TypeDefExt for TypeDef {
 
     fn is_agile(&self) -> bool {
         for attribute in self.attributes() {
-            if attribute.name() == "MarshalingBehaviorAttribute"
+            if (attribute.name() == "MarshalingBehaviorAttribute"
                 && matches!(
                     attribute.value().first(),
                     Some((_, Value::EnumValue(_, inner))) if matches!(**inner, Value::I32(2))
-                )
+                ))
+                || attribute.name() == "AgileAttribute"
             {
                 return true;
             }
