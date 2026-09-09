@@ -600,12 +600,18 @@ impl BitfieldBacking {
                 let o = Literal::u32_unsuffixed(offset);
                 (quote! { !(1 << #o) }, quote! { (value as #prim) << #o })
             };
+            let set_body = quote! {
+                self.#field = (self.#field & #clear) | (#place);
+            };
+            // It might be unsafe if the field is in a union.
             return quote! {
                 pub fn #getter(&self) -> bool {
-                    #get_body
+                    #[allow(unused_unsafe)]
+                    unsafe { #get_body }
                 }
                 pub fn #setter(&mut self, value: bool) {
-                    self.#field = (self.#field & #clear) | (#place);
+                    #[allow(unused_unsafe)]
+                    unsafe { #set_body }
                 }
             };
         }
@@ -665,10 +671,12 @@ impl BitfieldBacking {
 
         quote! {
             pub fn #getter(&self) -> #prim {
-                #get_body
+                #[allow(unused_unsafe)]
+                unsafe { #get_body }
             }
             pub fn #setter(&mut self, value: #prim) {
-                #setter_body
+                #[allow(unused_unsafe)]
+                unsafe { #setter_body }
             }
         }
     }
