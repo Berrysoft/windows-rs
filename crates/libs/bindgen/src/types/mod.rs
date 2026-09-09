@@ -272,10 +272,13 @@ impl Type {
                 "HSTRING" => return Remap::Type(Self::String),
                 "IInspectable" => return Remap::Type(Self::Object),
                 "IUnknown" => return Remap::Type(Self::IUnknown),
+                "CHAR" => return Remap::Type(Self::I8),
+                "BOOLEAN" => return Remap::Type(Self::Bool),
                 "BOOL" => return Remap::Type(Self::BOOL),
                 "NTSTATUS" => return Remap::Type(Self::NTSTATUS),
                 "RPC_STATUS" => return Remap::Type(Self::RPC_STATUS),
-                "BOOLEAN" => return Remap::Type(Self::Bool),
+                "LARGE_INTEGER" => return Remap::Type(Self::I64),
+                "ULARGE_INTEGER" => return Remap::Type(Self::U64),
                 "EventRegistrationToken" => return Remap::Type(Self::I64),
                 _ => {}
             }
