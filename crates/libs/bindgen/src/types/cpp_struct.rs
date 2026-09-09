@@ -328,7 +328,7 @@ impl CppStruct {
             constants
         };
 
-        let bitfields = self.write_bitfield_accessors(config, cfg);
+        let bitfields = self.write_bitfield_accessors(config, cfg, is_union);
 
         let mut tokens = quote! {
             #repr
@@ -487,7 +487,12 @@ impl CppStruct {
     }
 
     /// Generates typed accessors for coalesced C bit-fields in non-sys projections.
-    fn write_bitfield_accessors(&self, config: &Config, cfg: &TokenStream) -> TokenStream {
+    fn write_bitfield_accessors(
+        &self,
+        config: &Config,
+        cfg: &TokenStream,
+        is_union: bool,
+    ) -> TokenStream {
         if config.bindgen.style.is_sys() {
             return quote! {};
         }
@@ -527,6 +532,7 @@ impl CppStruct {
                     member,
                     *offset as u32,
                     *length as u32,
+                    is_union,
                 ));
             }
         }
@@ -581,6 +587,7 @@ impl BitfieldBacking {
         member: &str,
         offset: u32,
         width: u32,
+        is_union: bool,
     ) -> TokenStream {
         let getter = to_ident(member);
         let setter = to_ident(&format!("set_{member}"));
@@ -603,17 +610,25 @@ impl BitfieldBacking {
             let set_body = quote! {
                 self.#field = (self.#field & #clear) | (#place);
             };
-            // It might be unsafe if the field is in a union.
-            return quote! {
-                pub fn #getter(&self) -> bool {
-                    #[allow(unused_unsafe)]
-                    unsafe { #get_body }
-                }
-                pub fn #setter(&mut self, value: bool) {
-                    #[allow(unused_unsafe)]
-                    unsafe { #set_body }
-                }
-            };
+            if is_union {
+                return quote! {
+                    pub fn #getter(&self) -> bool {
+                        unsafe { #get_body }
+                    }
+                    pub fn #setter(&mut self, value: bool) {
+                        unsafe { #set_body }
+                    }
+                };
+            } else {
+                return quote! {
+                    pub fn #getter(&self) -> bool {
+                        #get_body
+                    }
+                    pub fn #setter(&mut self, value: bool) {
+                        #set_body
+                    }
+                };
+            }
         }
 
         // Signed backings use arithmetic shifts to sign-extend the isolated member bits.
@@ -669,14 +684,23 @@ impl BitfieldBacking {
             }
         };
 
-        quote! {
-            pub fn #getter(&self) -> #prim {
-                #[allow(unused_unsafe)]
-                unsafe { #get_body }
+        if is_union {
+            quote! {
+                pub fn #getter(&self) -> #prim {
+                    unsafe { #get_body }
+                }
+                pub fn #setter(&mut self, value: #prim) {
+                    unsafe { #setter_body }
+                }
             }
-            pub fn #setter(&mut self, value: #prim) {
-                #[allow(unused_unsafe)]
-                unsafe { #setter_body }
+        } else {
+            quote! {
+                pub fn #getter(&self) -> #prim {
+                    #get_body
+                }
+                pub fn #setter(&mut self, value: #prim) {
+                    #setter_body
+                }
             }
         }
     }
