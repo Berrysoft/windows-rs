@@ -10,13 +10,15 @@ impl FieldExt for Field {
             for attribute in self.attributes() {
                 if attribute.name() == "AssociatedEnumAttribute"
                     && let Some((_, Value::Utf8(enum_name))) = attribute.value().first()
+                    // TODO: find parent struct namespace
+                    && !enclosing.def.namespace().is_empty()
                 {
                     return Type::from_metadata_type(
                         &windows_metadata::Type::ValueName(windows_metadata::TypeName::named(
                             enclosing.def.namespace(),
                             enum_name,
                         )),
-                        Some(enclosing),
+                        None,
                         &[],
                         reader,
                     );
