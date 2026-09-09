@@ -36,6 +36,17 @@ impl TypeDefOrRefExt for TypeDefOrRef {
     }
 }
 
+pub trait MethodDefAttrExt {
+    fn should_keep_result(&self) -> bool;
+}
+
+impl MethodDefAttrExt for MethodDef {
+    fn should_keep_result(&self) -> bool {
+        self.has_attribute("CanReturnMultipleSuccessValuesAttribute")
+            || self.has_attribute("CanReturnErrorsAsSuccessAttribute")
+    }
+}
+
 // Extension trait for guid_attribute(), which uses our Value type rather than metadata's.
 pub trait GuidAttributeExt {
     fn guid_attribute(&self) -> Option<GUID>;

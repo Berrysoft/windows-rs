@@ -292,7 +292,7 @@ impl CppFn {
                     }
                 }
             }
-            ReturnHint::HResult => {
+            ReturnHint::ResultVoid => {
                 let where_clause = method.write_where(config, false);
 
                 quote! {
@@ -304,7 +304,7 @@ impl CppFn {
                     }
                 }
             }
-            ReturnHint::ReturnStruct | ReturnHint::None => {
+            ReturnHint::ReturnStruct | ReturnHint::None | ReturnHint::HResult => {
                 let where_clause = method.write_where(config, false);
 
                 quote! {

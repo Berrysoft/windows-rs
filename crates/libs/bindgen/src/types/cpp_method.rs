@@ -1,4 +1,5 @@
 use super::*;
+use crate::winmd::MethodDefAttrExt;
 
 #[derive(Clone, Debug)]
 pub struct CppMethod {
@@ -15,6 +16,7 @@ pub enum ReturnHint {
     Query(usize, usize),
     QueryOptional(usize, usize),
     ResultValue,
+    ResultVoid,
     HResult,
     ReturnStruct,
     ReturnValue,
@@ -191,6 +193,8 @@ impl CppMethod {
             Type::HRESULT => {
                 if is_retval {
                     return_hint = ReturnHint::ResultValue;
+                } else if !def.should_keep_result() {
+                    return_hint = ReturnHint::ResultVoid;
                 } else {
                     // Non-retval HRESULT consumers preserve non-S_OK success codes; producers use
                     // `Result`.
@@ -368,6 +372,15 @@ impl CppMethod {
                     }
                 }
             }
+            ReturnHint::ResultVoid => {
+                let where_clause = self.write_where(config, false);
+
+                quote! {
+                    #vis unsafe fn #name<#generics>(&self, #params) #abi_return_type #where_clause {
+                        unsafe { (windows_core::Interface::vtable(self).#vname)(windows_core::Interface::as_raw(self), #args).ok() }
+                    }
+                }
+            }
             ReturnHint::None | ReturnHint::HResult => {
                 let where_clause = self.write_where(config, false);
 
@@ -375,12 +388,6 @@ impl CppMethod {
                     quote! {
                         #vis unsafe fn #name<#generics>(&self, #params) #abi_return_type #where_clause {
                             unsafe { (windows_core::Interface::vtable(self).#vname)(windows_core::Interface::as_raw(self), #args); }
-                        }
-                    }
-                } else if matches!(self.signature.return_type, Type::HRESULT) {
-                    quote! {
-                        #vis unsafe fn #name<#generics>(&self, #params) #abi_return_type #where_clause {
-                            unsafe { (windows_core::Interface::vtable(self).#vname)(windows_core::Interface::as_raw(self), #args).ok() }
                         }
                     }
                 } else {
@@ -808,7 +815,7 @@ impl CppMethod {
         match &self.signature.return_type {
             Type::Void if self.def.has_attribute("DoesNotReturnAttribute") => quote! {  -> ! },
             Type::Void => quote! {},
-            Type::HRESULT => {
+            Type::HRESULT if !self.def.should_keep_result() => {
                 let result = config.write_core();
                 quote! { -> #result Result<()> }
             }
