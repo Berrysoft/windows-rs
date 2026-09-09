@@ -593,7 +593,9 @@ impl BitfieldBacking {
         let setter = to_ident(&format!("set_{member}"));
         let prim = &self.prim;
 
-        if width == 1 {
+        if width == 0 {
+            return quote! {};
+        } else if width == 1 {
             // Single-bit members project as `bool`.
             let get_body = if offset == 0 {
                 quote! { self.#field & 1 != 0 }
