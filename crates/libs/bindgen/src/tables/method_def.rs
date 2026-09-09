@@ -54,6 +54,21 @@ impl MethodDefExt for MethodDef {
                     | windows_metadata::reader::ParamDirection::Input
             );
             let mut ty = Type::from_metadata_type(meta_ty, None, generics, reader);
+            for attribute in def.iter().flat_map(|p| p.attributes()) {
+                if attribute.name() == "AssociatedEnumAttribute"
+                    && let Some((_, Value::Utf8(enum_name))) = attribute.value().first()
+                {
+                    ty = Type::from_metadata_type(
+                        &windows_metadata::Type::ValueName(windows_metadata::TypeName::named(
+                            self.parent().namespace(),
+                            enum_name,
+                        )),
+                        None,
+                        generics,
+                        reader,
+                    );
+                }
+            }
 
             if param_is_input_only {
                 ty = ty.to_const_type();
