@@ -436,7 +436,10 @@ impl CppMethod {
                     }
                 }
             }
-            ReturnHint::Query(..) | ReturnHint::QueryOptional(..) | ReturnHint::HResult => {
+            ReturnHint::Query(..)
+            | ReturnHint::QueryOptional(..)
+            | ReturnHint::HResult
+            | ReturnHint::ResultVoid => {
                 let invoke_args = self
                     .signature
                     .params
