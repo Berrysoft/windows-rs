@@ -333,6 +333,10 @@ impl CppFn {
             "GetWindowLongPtrW" => Some("GetWindowLongW"),
             "SetWindowLongPtrA" => Some("SetWindowLongA"),
             "SetWindowLongPtrW" => Some("SetWindowLongW"),
+            "GetClassLongPtrA" => Some("GetClassLongA"),
+            "GetClassLongPtrW" => Some("GetClassLongW"),
+            "SetClassLongPtrA" => Some("SetClassLongA"),
+            "SetClassLongPtrW" => Some("SetClassLongW"),
             _ => None,
         }
     }
@@ -354,6 +358,22 @@ impl CppFn {
             "SetWindowLongPtrW" => quote! {
                 #[cfg(target_pointer_width = "32")]
                 pub use SetWindowLongW as SetWindowLongPtrW;
+            },
+            "GetClassLongPtrA" => quote! {
+                #[cfg(target_pointer_width = "32")]
+                pub use GetClassLongA as GetClassLongPtrA;
+            },
+            "GetClassLongPtrW" => quote! {
+                #[cfg(target_pointer_width = "32")]
+                pub use GetClassLongW as GetClassLongPtrW;
+            },
+            "SetClassLongPtrA" => quote! {
+                #[cfg(target_pointer_width = "32")]
+                pub use SetClassLongA as SetClassLongPtrA;
+            },
+            "SetClassLongPtrW" => quote! {
+                #[cfg(target_pointer_width = "32")]
+                pub use SetClassLongW as SetClassLongPtrW;
             },
             _ => quote! {},
         }
