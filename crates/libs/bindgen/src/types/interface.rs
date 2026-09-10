@@ -412,8 +412,9 @@ impl Interface {
             let implementation_only = config.should_implement(type_name, false)
                 && matches!(config.filter.type_role(type_name), TypeRole::Shell);
             let suppress_methods = minimal
-                && ((is_exclusive && self.is_factory(config.reader)) || implementation_only);
-            if !suppress_methods && (!is_exclusive || minimal) {
+                && ((is_exclusive && self.is_factory(config.reader)) && !self.is_overrides()
+                    || implementation_only);
+            if !suppress_methods && (!is_exclusive || minimal || self.is_overrides()) {
                 let method_names = &mut MethodNames::new();
                 let virtual_names = &mut MethodNames::new();
                 let mut method_tokens = TokenStream::new();
@@ -779,6 +780,10 @@ impl Interface {
         }
 
         false
+    }
+
+    fn is_overrides(&self) -> bool {
+        self.def.name().contains("Overrides")
     }
 
     pub fn runtime_signature(&self, reader: &Reader) -> String {
