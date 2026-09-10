@@ -86,6 +86,7 @@ pub struct Bindgen {
     input_default: bool,
     filter: Vec<String>,
     output: PathBuf,
+    references: Vec<String>,
     derive: Vec<String>,
     implement: Option<Vec<String>>,
     compose: Vec<String>,
@@ -306,6 +307,23 @@ impl Bindgen {
         self
     }
 
+    /// Add a reference dependency.
+    pub fn reference(&mut self, reference: &str) -> &mut Self {
+        self.references(std::iter::once(reference))
+    }
+
+    /// Add multiple reference dependencies.
+    pub fn references<I, S>(&mut self, references: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for reference in references {
+            self.references.push(reference.as_ref().to_string());
+        }
+        self
+    }
+
     /// Override the default Rust formatter path.
     pub fn rustfmt(&mut self, rustfmt: &str) -> &mut Self {
         self.rustfmt = Some(rustfmt.to_string());
@@ -491,7 +509,11 @@ impl Bindgen {
         report_timing(&self.output, "metadata", phase.elapsed());
 
         let phase = std::time::Instant::now();
-        let mut references: Vec<ReferenceStage> = Vec::new();
+        let mut references: Vec<ReferenceStage> = self
+            .references
+            .iter()
+            .map(|s| ReferenceStage::parse(s))
+            .collect();
 
         if !sys {
             // Register implicit references to sibling windows-* crates present in metadata.
@@ -825,14 +847,15 @@ fn namespace_feature(namespace: &str) -> String {
     }
 }
 
-/// Prepend reference entries so they take precedence.
+/// Prepend `Flat`-style reference entries so they take precedence over
+/// user-supplied `--reference` entries.
 fn prepend_default_refs(refs: &mut Vec<ReferenceStage>, crate_name: &str, paths: &[&str]) {
     refs.splice(
         0..0,
         paths
             .iter()
             .rev()
-            .map(|path| ReferenceStage::new(crate_name, path)),
+            .map(|path| ReferenceStage::new(crate_name, ReferenceStyle::Flat, path)),
     );
 }
 
