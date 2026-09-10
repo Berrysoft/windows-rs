@@ -53,6 +53,29 @@ impl TypeMap {
                             } else {
                                 ty.combine(&mut item_dependencies, reader);
                             }
+
+                            // Unscoped enum variants are standalone constants; include the requested set
+                            // explicitly.
+                            if let Type::CppEnum(e) = &ty
+                                && !e.def.has_attribute("ScopedEnumAttribute")
+                                && let Some(variant_set) =
+                                    filter.enum_variant_filter(e.def.namespace(), e.def.name())
+                            {
+                                let enum_arches = e.def.arches();
+                                for field in e.def.fields() {
+                                    if field.flags().contains(FieldAttributes::Literal)
+                                        && variant_set.includes(field.name())
+                                    {
+                                        Type::CppConst(CppConst {
+                                            namespace: e.def.namespace(),
+                                            field,
+                                            enum_arches,
+                                            is_enum_member: true,
+                                        })
+                                        .combine(&mut item_dependencies, reader);
+                                    }
+                                }
+                            }
                         }
 
                         if item_dependencies.excluded(filter, references) {
