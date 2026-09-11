@@ -28,6 +28,9 @@ impl CppEnum {
 
     pub fn write(&self, config: &Config) -> TokenStream {
         let tn = self.def.type_name();
+        if tn == TypeName::WIN32_ERROR {
+            return quote! {};
+        }
         let is_scoped = self.def.has_attribute("ScopedEnumAttribute");
 
         // Unscoped C enums are bare integer aliases; scoped enums keep newtype projection.
