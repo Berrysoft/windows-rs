@@ -495,6 +495,10 @@ impl Type {
                 let core = config.write_core();
                 quote! { #core HRESULT }
             }
+            Self::CppEnum(e) if e.type_name() == TypeName::WIN32_ERROR => {
+                let core = config.write_core();
+                quote! { #core WIN32_ERROR }
+            }
             Self::BOOL => {
                 let core = config.write_core();
                 quote! { #core BOOL }

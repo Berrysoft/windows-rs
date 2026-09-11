@@ -183,11 +183,15 @@ impl CppConst {
                 // layers.
                 let unscoped_enum_const = self.is_enum_member
                     || matches!(&field_ty, Type::CppEnum(e) if !e.def.has_attribute("ScopedEnumAttribute"));
+                let is_win32_error = self.is_enum_member
+                    && matches!(&field_ty, Type::CppEnum(e) if e.type_name() == TypeName::WIN32_ERROR);
                 let field_ty_bare_alias =
                     matches!(&field_ty, Type::CppStruct(s) if config.typedef_emits_bare(s.def));
                 let emit_alias_const =
                     config.bindgen.style.is_sys() || unscoped_enum_const || field_ty_bare_alias;
-                if emit_alias_const || matches!(field_ty, Type::Bool | Type::ISize | Type::USize) {
+                if emit_alias_const && !is_win32_error
+                    || matches!(field_ty, Type::Bool | Type::ISize | Type::USize)
+                {
                     // Arch-blind lookup can find a same-name non-enum sibling; enum members stay
                     // integers.
                     let value = if unscoped_enum_const {
