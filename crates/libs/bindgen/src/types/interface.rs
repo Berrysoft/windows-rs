@@ -212,7 +212,7 @@ impl Interface {
         let name = self.write_name(config);
 
         let vtbl_name = self.write_vtbl_name(config);
-        let is_exclusive = self.is_exclusive();
+        let is_exclusive = self.is_exclusive() && !self.is_overrides();
         let constraints = config.write_generic_constraints(&self.generics);
         let phantoms = config.write_generic_phantoms(&self.generics);
         let named_phantoms = config.write_generic_named_phantoms(&self.generics);
@@ -412,9 +412,8 @@ impl Interface {
             let implementation_only = config.should_implement(type_name, false)
                 && matches!(config.filter.type_role(type_name), TypeRole::Shell);
             let suppress_methods = minimal
-                && ((is_exclusive && self.is_factory(config.reader)) && !self.is_overrides()
-                    || implementation_only);
-            if !suppress_methods && (!is_exclusive || minimal || self.is_overrides()) {
+                && ((is_exclusive && self.is_factory(config.reader)) || implementation_only);
+            if !suppress_methods && (!is_exclusive || minimal) {
                 let method_names = &mut MethodNames::new();
                 let virtual_names = &mut MethodNames::new();
                 let mut method_tokens = TokenStream::new();
@@ -598,23 +597,23 @@ impl Interface {
                     let mut names = MethodNames::new();
 
                     let impl_methods: Vec<_> = methods.iter().map(|method| match method {
-                MethodOrName::Method(method) => {
-                    let name = names.add(method.def);
-                    let signature = method.write_abi(config, true);
-                    let call = quote! { #impl_name::#name };
-                    let upcall = method.write_upcall(call, true, config);
+                        MethodOrName::Method(method) => {
+                            let name = names.add(method.def);
+                            let signature = method.write_abi(config, true);
+                            let call = quote! { #impl_name::#name };
+                            let upcall = method.write_upcall(call, true, config);
 
-                    quote! {
-                        unsafe extern "system" fn #name<#constraints Identity: #impl_name <#(#generics,)*>, const OFFSET: isize> (#signature) -> windows_core::HRESULT {
-                            unsafe {
-                                let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
-                                #upcall
+                            quote! {
+                                unsafe extern "system" fn #name<#constraints Identity: #impl_name <#(#generics,)*>, const OFFSET: isize> (#signature) -> windows_core::HRESULT {
+                                    unsafe {
+                                        let this: &Identity = &*((this as *const *const ()).offset(OFFSET) as *const Identity);
+                                        #upcall
+                                    }
+                                }
                             }
                         }
-                    }
-                }
-                _ => quote! {},
-            }).collect();
+                        _ => quote! {},
+                    }).collect();
 
                     let trait_methods = write_impl_trait_methods(&methods, |method| {
                         method.write_impl_signature(config, true, true)
@@ -631,25 +630,25 @@ impl Interface {
                     };
 
                     result.combine(quote! {
-                #cfg
-                pub trait #impl_name <#(#generics),*> : #requires where #constraints {
-                    #(#trait_methods)*
-                }
-                #cfg
-                impl<#constraints> #vtbl_name {
-                    pub const fn new<Identity: #impl_name <#(#generics,)*>, const OFFSET: isize>() -> Self {
-                        #(#impl_methods)*
-                        Self {
-                            base__: windows_core::IInspectable_Vtbl::new::<Identity, #name, OFFSET>(),
-                            #(#field_methods)*
-                            #named_phantoms
+                        #cfg
+                        pub trait #impl_name <#(#generics),*> : #requires where #constraints {
+                            #(#trait_methods)*
                         }
-                    }
-                    pub fn matches(iid: &windows_core::GUID) -> bool {
-                        iid == &<#name as windows_core::Interface>::IID
-                    }
-                }
-            });
+                        #cfg
+                        impl<#constraints> #vtbl_name {
+                            pub const fn new<Identity: #impl_name <#(#generics,)*>, const OFFSET: isize>() -> Self {
+                                #(#impl_methods)*
+                                Self {
+                                    base__: windows_core::IInspectable_Vtbl::new::<Identity, #name, OFFSET>(),
+                                    #(#field_methods)*
+                                    #named_phantoms
+                                }
+                            }
+                            pub fn matches(iid: &windows_core::GUID) -> bool {
+                                iid == &<#name as windows_core::Interface>::IID
+                            }
+                        }
+                    });
                 }
             }
 
