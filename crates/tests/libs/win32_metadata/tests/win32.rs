@@ -72,12 +72,11 @@ const FILTER: &[&str] = &[
     "MENUTEMPLATEA",
     // A callback/function-pointer typedef embedded in a struct field
     // (`WNDCLASSEXA::lpfnWndProc: WNDPROC`) alongside a wide spread of opaque
-    // handles (`HINSTANCE`/`HICON`/`HCURSOR`/`HBRUSH`).
+    // handles (`HINSTANCE`/`HICON`/`HCURSOR`/`HBRUSH`) whose declared types survive.
     "WNDCLASSEXA",
     // A nested struct (`MSG` embeds `POINT`) reached as an out-pointer param.
     "MSG",
-    // `gdi32` functions: exercise `link!` lowering and opaque handle params
-    // (`HDC`/`HGDIOBJ`/`HBITMAP` -> `*mut c_void`).
+    // `gdi32` functions: exercise `link!` lowering and opaque handle parameters.
     "BitBlt",
     "CreateCompatibleBitmap",
     "CreateCompatibleDC",
@@ -130,7 +129,7 @@ fn assert_dispatcher_queue_function(winmd: &str) {
     let signature = function.signature(&[]);
     assert_eq!(
         signature.return_type,
-        Type::value_named("Windows.Win32", "HRESULT")
+        Type::value_named("Windows.Foundation", "HResult")
     );
     assert_eq!(
         signature.types,

@@ -13,67 +13,88 @@
 
 Use `windows-webview` when a Windows desktop application needs to host web content, exchange
 messages with JavaScript, or use browser facilities such as profiles, cookies, downloads, and the
-Chrome DevTools Protocol. The default `system` feature hosts WebView2 through `windows-window`.
-Disable default features and enable `reactor` to place the WinUI XAML WebView2 control in a
-[`windows-reactor`](windows-reactor.md) view. The features are additive when an application uses
-both host types.
+Chrome DevTools Protocol. The crate has no default UI framework. Enable `system` to host WebView2
+through `windows-window`, or `reactor` to place the WinUI XAML WebView2 control in a
+[`windows-reactor`](windows-reactor.md) view. The features are additive.
 
 The crate wraps a selected WebView2 surface rather than exposing the complete SDK. Use raw WebView2
 bindings when an application needs APIs that are not represented here.
 
+## UI operation model
+
+Low-level WebView2 creation and script operations complete through callbacks. Starting an
+operation returns `Result<()>`: an error means the operation did not start, while success means its
+result may later be passed to the callback on the same UI thread. A callback runs at most once and
+may be dropped without running if its native operation or UI apartment ends first.
+
+No operation runs a nested message loop. Win32, WinUI, Reactor, and other UI hosts retain control
+of message preprocessing, dispatch, and shutdown. `WebViewWindowBuilder::run` is a separate
+convenience for applications that choose `windows-window` as their top-level host; it owns the one
+application message loop.
+
+This differs from [`windows-pickers`](windows-pickers.md): a Common Item Dialog is a synchronous
+native modal operation whose `Show` method owns its modal loop. Reactor stages such modal work with
+`ComponentContext::run_window`; it uses `ElementRef` requests for callback-completed control work.
+
 ## The basic idea
 
-A WebView host has three main objects:
+A low-level WebView host has three main objects:
 
 | Type | Purpose |
 | --- | --- |
 | `Environment` | Owns the browser process and user-data context |
 | `Controller` | Places a browser inside a native parent window |
 | `WebView` | Navigates, runs scripts, exchanges messages, and exposes page events |
+| `WebViewHost` | Owns all three objects while another framework owns the parent |
+| `WebViewWindow` | Adds an owned `windows-window` parent and lifecycle handling |
 
-Create them in that order, navigate the `WebView`, and keep the `Controller` alive while the page is
-hosted.
+`WebViewHostBuilder` creates the first three as one callback-completed operation. Use the individual
+types when an application shares an environment or needs a custom creation sequence.
 
-The Microsoft Edge WebView2 runtime must be installed for native window hosting. The host also
-needs a live message loop on a single-threaded apartment. `Environment::new` initializes the
-calling thread as an STA when needed, as does `Environment::with_options`.
+The Microsoft Edge WebView2 runtime must be installed for native window hosting. Low-level hosts
+need a live message loop on a COM single-threaded apartment. Standalone applications initialize
+one with `windows_core::init_sta()`. `WebViewWindowBuilder::run` handles this for its owned loop.
 
 ## Host your first page
 
-[`windows-window`](windows-window.md) provides a small parent window and message loop:
+The `system` feature provides a complete `windows-window` host:
 
-```rust,ignore
+```rust,no_run
 use windows_webview::*;
-use windows_window::{Window, run};
 
 fn main() -> Result<()> {
-    let window = Window::new("WebView2")
+    WebViewWindow::new("WebView2")
         .size(1000, 700)
-        .create()?;
-
-    let environment = Environment::new()?;
-    let controller = environment.create_controller(&window)?;
-    let webview = controller.webview()?;
-
-    let (width, height) = window.client_size();
-    controller.set_bounds(0, 0, width, height)?;
-    webview.navigate("https://learn.microsoft.com/windows/apps/")?;
-
-    run();
-    Ok(())
+        .run(|host| {
+            host.webview()
+                .navigate("https://learn.microsoft.com/windows/apps/")?;
+            Ok(())
+        })
 }
 ```
 
-The controller bounds use parent-client pixels. Update them whenever the parent window changes
-size. The [`minimal`](../../crates/samples/webview/samples/examples/minimal.rs) example uses the
-shared sample host, which includes resize and shutdown handling.
+The host resizes the controller with its parent and closes WebView2 before the HWND is destroyed.
+Call `host.retain` or `host.retain_all` for event registrations that should remain active for the
+host lifetime. `WebViewWindowBuilder::on_close` reports normal close processing, including
+programmatic closure, when another UI framework coordinates several windows. Direct destruction
+during drop does not call it.
 
-Environment and controller creation start asynchronous WebView2 operations, but these constructors
-wait for completion while pumping the UI thread. Create them during setup before entering the
-application's own message loop.
+Use `WebViewHostBuilder` when a framework already owns the parent HWND and UI loop:
 
-Keep the parent window alive longer than its controller. When the application controls shutdown
-order, call `controller.close()` before destroying the parent window.
+```rust,ignore
+WebViewHost::builder().create_for_hwnd(parent, move |result| {
+    match result {
+        Ok(host) => framework.attach_webview(host),
+        Err(error) => framework.report_webview_error(error),
+    }
+})?;
+```
+
+The builder chains environment and controller creation without blocking or pumping messages.
+`WebViewHost` owns the resulting environment, controller, browser, and retained event
+registrations. The framework stores that one value and remains responsible for parent lifetime,
+layout, position notifications, and shutdown. The raw `Environment` and `Controller` callback APIs
+remain available when a framework needs separate environment reuse or custom controller creation.
 
 ## Keep event registrations alive
 
@@ -186,22 +207,29 @@ Script results are JSON encoded. The callback runs later on the UI thread.
 
 ## Add script before each document loads
 
-`add_script_to_execute_on_document_created` installs script before page JavaScript runs:
+`add_script_to_execute_on_document_created` installs script before page JavaScript runs and
+returns its identifier through a callback:
 
 ```rust,ignore
-let script = webview.add_script_to_execute_on_document_created(
+let page = webview.clone();
+webview.add_script_to_execute_on_document_created(
     "document.documentElement.dataset.host = 'windows-rs';",
+    move |result| {
+        let script = result.unwrap();
+        println!("registered {}", script.as_str());
+        page.navigate("https://example.com").unwrap();
+    },
 )?;
 ```
 
-Keep the returned `ScriptId` if the script may need to be removed:
+Save the returned `ScriptId` if the script may need to be removed later:
 
 ```rust,ignore
-webview.remove_script_to_execute_on_document_created(&script)?;
+webview.remove_script_to_execute_on_document_created(&saved_script)?;
 ```
 
-Like environment creation, adding this script waits for an asynchronous WebView2 operation while
-pumping the UI thread. Install it during setup.
+Wait for successful registration before navigating when the script must apply to the first
+document.
 
 ## Host local files
 
@@ -280,28 +308,26 @@ after the XAML control enters a live visual tree, not during `Component::create`
 The convenience function panics on a native initialization error. Use `webview_result` when the
 component should receive and display that error. A self-contained Reactor app must also deploy
 `Microsoft.Web.WebView2.Core.dll`; [`windows-reactor-setup`](windows-reactor-setup.md) stages it.
-The [`reactor/webview`](../../crates/samples/reactor/webview) sample contains the complete
-component and deployment layout.
+The [`reactor`](../../crates/samples/webview/reactor) sample embeds a WinUI WebView2 control in a
+Reactor view and exercises navigation, scripts, messaging, DevTools, and events through the shared
+`WebView` API. The [`reactor-window`](../../crates/samples/webview/reactor-window) sample instead
+uses a Reactor window as a toolbar for a callback-driven `WebViewWindow`. It sets
+`quit_on_close(false)` so both windows share Reactor's UI thread and message loop, and uses
+`on_close` to keep the Reactor component synchronized with the external window. This sample also
+exercises controller zoom and parent-window lifecycle, which the WinUI WebView2 control does not
+expose through supported interop.
 
 ## What to read next
 
-Run an example with `cargo run -p webview_samples --example <name>`.
+Run an example with `cargo run -p webview-<name>`.
 
 | Example | What it shows |
 | --- | --- |
-| `minimal` | Window hosting, resize, and navigation |
-| `events` | Navigation, permissions, popups, and process failures |
-| `ipc` | Messages and script execution |
-| `local_files` | A folder mapped to an HTTPS origin |
-| `custom_protocol` | HTML and CSS served from memory |
-| `downloads` | Download progress and cancellation |
-| `cookies` | Creating and enumerating cookies |
-| `profile` | Private mode and browsing-data cleanup |
-| `devtools` | Chrome DevTools Protocol calls and events |
-| [`reactor/webview`](../../crates/samples/reactor/webview) | Hosting WebView2 in Reactor |
+| [`minimal`](../../crates/samples/webview/minimal) | Complete `WebViewWindow` hosting |
+| [`reactor`](../../crates/samples/webview/reactor) | WebView2 embedded in a Reactor view |
 
-Start with `minimal`, then `ipc` or `local_files`. Profiles, downloads, cookies, and DevTools are
-independent workflows that can wait until the basic host lifecycle is familiar.
+Browse [`crates/samples/webview`](../../crates/samples/webview) for focused browser features and
+other hosting models.
 
 ---
 
@@ -333,8 +359,8 @@ types and targets `x86_64-pc-windows-msvc` with Microsoft extensions. Regenerate
 Bindings use `--flat --minimal` and the filter in `crates/tools/webview/src/webview.txt`. Filter
 method names are raw metadata names such as `put_Bounds` and `get_CoreWebView2`, not projected
 names. Implemented interfaces belong in `--implement`, without method filters. The `--dead-code`
-option keeps interface methods crate-private. The small Win32 filter supplies message pumping,
-COM string allocation, and memory-stream support without a dependency on the full `windows` crate.
+option keeps interface methods crate-private. The small Win32 filter supplies COM string allocation
+and memory-stream support without a dependency on the full `windows` crate.
 
 ### Wrapper implementation
 
@@ -343,9 +369,9 @@ Completion handlers and event adapters in `handler.rs` use `implement_decl!`, av
 caller-provided environment options interfaces. Its string getters allocate with the COM task
 allocator because WebView2 takes ownership.
 
-`pump.rs` stores a one-shot `Result<T>` in an `Rc<Cell<_>>` and dispatches messages until the
-completion callback fills it. This is valid because creation and completion stay on one STA
-thread. Runtime operations remain callback-based to avoid nested message pumping.
+All WebView2 completion operations use the same callback contract. Their public methods report
+immediate initiation failures and retain one-shot handlers for native completion. No operation
+owns or nests the host's message loop.
 
 Event adapters convert COM add/remove tokens into `EventRegistration`. Resource interception also
 removes its request filter when the registration drops. `protocol.rs` converts response bytes to
@@ -372,5 +398,8 @@ self-contained deployment.
 Generated bindings carry casing lint expectations and allow dead code only when the Reactor bridge
 is disabled. Keep those expectations synchronized with generator output.
 
-There is no headless integration suite because WebView2 requires a runtime, window, and message
-pump. The example applications are the end-to-end coverage for hosting and feature workflows.
+`test-webview` runs the raw host and browser feature fixtures against a live WebView2 runtime.
+The self-contained `test-reactor-selftest` configuration covers WinUI control initialization, the
+COM bridge, navigation, and script execution. Both tests run with real windows and message pumps.
+`test-webview --headless` suppresses its interactive UI; the Reactor selftest manages and closes
+its own test windows.

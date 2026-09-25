@@ -1,5 +1,4 @@
-use super::super::*;
-use crate::test::RecordingRuntime;
+use super::*;
 
 #[test]
 fn common_element_state_is_available_on_every_layout_control() {
@@ -41,6 +40,64 @@ fn common_element_state_is_available_on_every_layout_control() {
     assert_eq!(
         mounted.property(PropertyId::Height),
         Some(&PropertyValue::F64(48.0))
+    );
+}
+
+#[test]
+fn theme_transitions_mount_remain_stable_and_clear() {
+    let transitions = || [ThemeTransition::Reposition];
+    let mut pump = Pump::new(RecordingRuntime::default());
+    pump.mount(
+        Border::new()
+            .margin(Thickness::new(20.0, 0.0, 0.0, 0.0))
+            .transitions(transitions())
+            .into(),
+    )
+    .unwrap();
+    let node = pump.root().unwrap();
+    assert!(matches!(
+        pump.runtime()
+            .node(node)
+            .and_then(|node| node.property(PropertyId::Transitions)),
+        Some(PropertyValue::ThemeTransitions(value))
+            if value.as_slice() == transitions().as_slice()
+    ));
+
+    let batches = pump.runtime().commands().len();
+    pump.update(
+        Border::new()
+            .margin(Thickness::new(80.0, 0.0, 0.0, 0.0))
+            .transitions(transitions())
+            .into(),
+    )
+    .unwrap();
+    assert!(
+        pump.runtime().commands()[batches..]
+            .iter()
+            .flatten()
+            .all(|command| {
+                !matches!(
+                    command,
+                    Command::SetProperty {
+                        property: PropertyId::Transitions,
+                        ..
+                    }
+                )
+            })
+    );
+
+    pump.update(
+        Border::new()
+            .margin(Thickness::new(80.0, 0.0, 0.0, 0.0))
+            .transitions_optional(None::<[ThemeTransition; 1]>)
+            .into(),
+    )
+    .unwrap();
+    assert_eq!(
+        pump.runtime()
+            .node(node)
+            .and_then(|node| node.property(PropertyId::Transitions)),
+        None
     );
 }
 
@@ -148,8 +205,11 @@ fn canvas_coordinates_mount_update_and_clear() {
 fn grid_view(first_row: i32, include_definitions: bool) -> View {
     let grid = Grid::new().row_spacing(8.0).column_spacing(12.0);
     let grid = if include_definitions {
-        grid.rows([GridLength::Auto, GridLength::STAR])
-            .columns([GridLength::Pixel(120.0), GridLength::STAR])
+        grid.rows([GridLength::Auto, GridLength::STAR.min(40.0).max(200.0)])
+            .columns([
+                GridLength::Pixel(120.0).min(80.0),
+                GridLength::STAR.max(400.0),
+            ])
     } else {
         grid
     };
@@ -182,19 +242,19 @@ fn virtual_grid_child(row: Option<i32>) -> View {
 }
 
 #[test]
-fn grid_definitions_reject_invalid_lengths_before_mount() {
+fn grid_lengths_reject_invalid_values() {
     for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-        assert!(
-            std::panic::catch_unwind(|| Grid::new().rows([GridLength::Pixel(invalid)])).is_err()
-        );
-        assert!(
-            std::panic::catch_unwind(|| Grid::new().columns([GridLength::Star(invalid)])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| GridLength::Pixel(invalid)).is_err());
+        assert!(std::panic::catch_unwind(|| GridLength::Star(invalid)).is_err());
+        assert!(std::panic::catch_unwind(|| GridLength::Auto.min(invalid)).is_err());
+        assert!(std::panic::catch_unwind(|| GridLength::STAR.max(invalid)).is_err());
     }
 
-    let _ = Grid::new()
-        .rows([GridLength::Pixel(0.0)])
-        .columns([GridLength::Star(0.0)]);
+    assert!(std::panic::catch_unwind(|| GridLength::Auto.min(20.0).max(10.0)).is_err());
+    assert!(std::panic::catch_unwind(|| GridLength::Auto.max(10.0).min(20.0)).is_err());
+
+    let _ = GridLength::Pixel(0.0).min(0.0).max(0.0);
+    let _ = GridLength::Star(0.0);
 }
 
 #[test]
@@ -210,7 +270,7 @@ fn grid_mount_records_definitions_spacing_and_child_placement() {
             .unwrap()
             .property(PropertyId::GridRows),
         Some(&PropertyValue::GridLengths(
-            vec![GridLength::Auto, GridLength::STAR].into()
+            vec![GridLength::Auto, GridLength::STAR.min(40.0).max(200.0)].into()
         ))
     );
     assert_eq!(
@@ -219,7 +279,11 @@ fn grid_mount_records_definitions_spacing_and_child_placement() {
             .unwrap()
             .property(PropertyId::GridColumns),
         Some(&PropertyValue::GridLengths(
-            vec![GridLength::Pixel(120.0), GridLength::STAR].into()
+            vec![
+                GridLength::Pixel(120.0).min(80.0),
+                GridLength::STAR.max(400.0)
+            ]
+            .into()
         ))
     );
     assert_eq!(
@@ -275,7 +339,7 @@ fn grid_update_and_clear_publish_only_after_native_success() {
     ));
     assert_eq!(
         pump.tree.native(child).properties.get(&PropertyId::GridRow),
-        Some(&Some(PropertyValue::I32(2)))
+        Some(&PropertyValue::I32(2))
     );
 }
 
@@ -288,6 +352,27 @@ fn identical_grid_update_is_a_native_no_op() {
     pump.update_view(grid_view(0, true)).unwrap();
 
     assert_eq!(pump.runtime().batches(), batches);
+}
+
+#[test]
+fn grid_constraint_change_updates_definitions() {
+    let mut pump = Pump::new(RecordingRuntime::default());
+    pump.mount_view(Grid::new().rows([GridLength::STAR.min(40.0)]).into())
+        .unwrap();
+    let root = pump.root().unwrap();
+
+    pump.update_view(Grid::new().rows([GridLength::STAR.min(80.0)]).into())
+        .unwrap();
+
+    assert_eq!(
+        pump.runtime()
+            .node(root)
+            .unwrap()
+            .property(PropertyId::GridRows),
+        Some(&PropertyValue::GridLengths(
+            vec![GridLength::STAR.min(80.0)].into()
+        ))
+    );
 }
 
 #[test]
@@ -494,7 +579,7 @@ fn failed_virtual_grid_placement_does_not_publish_candidate_state() {
             .native(collection)
             .properties
             .get(&PropertyId::GridRow),
-        Some(&Some(PropertyValue::I32(1)))
+        Some(&PropertyValue::I32(1))
     );
     assert!(pump.poisoned());
 }

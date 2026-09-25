@@ -1,11 +1,5 @@
 use super::*;
 
-pub(super) struct PropertyCommit {
-    pub(super) node: NodeId,
-    pub(super) property: PropertyId,
-    pub(super) value: Option<PropertyValue>,
-}
-
 pub(super) struct ReferenceCommit {
     pub(super) node: NodeId,
     pub(super) old: Option<NativeElementRef>,
@@ -14,12 +8,12 @@ pub(super) struct ReferenceCommit {
 
 pub(super) struct UpdatePlan {
     pub(super) commands: Vec<Command>,
-    pub(super) commits: Vec<PropertyCommit>,
     pub(super) diagnostics: Vec<PumpDiagnostic>,
     pub(super) reference_commits: Vec<ReferenceCommit>,
     pub(super) identity: WindowToken,
     pub(super) reconcile_observations: bool,
     pub(super) post_publish_commands: Vec<Command>,
+    pub(super) post_publish_window_operation: Option<(NodeId, WindowOperation)>,
     pub(super) post_publish_windows: Vec<View>,
 }
 
@@ -98,12 +92,12 @@ impl UpdatePlan {
     pub(super) fn new(identity: WindowToken) -> Self {
         Self {
             commands: Vec::new(),
-            commits: Vec::new(),
             diagnostics: Vec::new(),
             reference_commits: Vec::new(),
             identity,
             reconcile_observations: false,
             post_publish_commands: Vec::new(),
+            post_publish_window_operation: None,
             post_publish_windows: Vec::new(),
         }
     }

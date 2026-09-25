@@ -65,16 +65,6 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                     Grid::new().children((#name::new(),))
                 }
             },
-            ResolvedPlacement::WindowLifetime if !control.slots.is_empty() => {
-                let slot_type = ident(&format!("{}Slot", control.name));
-                quote! {
-                    fn #function(_stage: usize) -> View {
-                        Grid::new().children((
-                            #name::new().slots(std::iter::empty::<SlotView<#slot_type>>()),
-                        ))
-                    }
-                }
-            }
             ResolvedPlacement::WindowLifetime => quote! {
                 fn #function(_stage: usize) -> View {
                     Grid::new().children((#name::new(),))
@@ -85,6 +75,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                     TextBlock::new()
                         .text("tooltip target")
                         .tooltip_with(Tooltip::rich(TextBlock::new().text("tooltip content")))
+                        .into()
                 }
             },
         }
@@ -221,12 +212,11 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                 );
             }
             for slot in &control.slots {
-                let slot_type = ident(&format!("{}Slot", control.name));
-                let slot_name = ident(&slot.name);
+                let slot_method = ident(&to_snake_case(&slot.name));
                 let item_control = control
                     .selection
                     .as_ref()
-                    .filter(|selection| selection.slot == slot.name)
+                    .filter(|selection| selection.slots.contains(&slot.name))
                     .map(|selection| selection.item.as_str())
                     .or_else(|| slot.item_controls.first().map(String::as_str))
                     .or_else(|| {
@@ -256,22 +246,30 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                 };
                 let initial = match &slot.shape {
                     SlotShape::Single(_) => quote! {
-                        #control_name::new().slot(#slot_type::#slot_name, #initial_child)
+                        #control_name::new().#slot_method(#initial_child)
+                    },
+                    SlotShape::Collection(_) if slot.shape.collection_item().is_some() => quote! {
+                        #control_name::new().#slot_method(
+                            [Keyed::new("surface", #initial_child)],
+                        )
                     },
                     SlotShape::Collection(_) => quote! {
-                        #control_name::new().collection_slot(
-                            #slot_type::#slot_name,
+                        #control_name::new().#slot_method(
                             [KeyedView::new("surface", #initial_child)],
                         )
                     },
                 };
                 let alternate = match &slot.shape {
                     SlotShape::Single(_) => quote! {
-                        #control_name::new().slot(#slot_type::#slot_name, #alternate_child)
+                        #control_name::new().#slot_method(#alternate_child)
+                    },
+                    SlotShape::Collection(_) if slot.shape.collection_item().is_some() => quote! {
+                        #control_name::new().#slot_method(
+                            [Keyed::new("surface", #alternate_child)],
+                        )
                     },
                     SlotShape::Collection(_) => quote! {
-                        #control_name::new().collection_slot(
-                            #slot_type::#slot_name,
+                        #control_name::new().#slot_method(
                             [KeyedView::new("surface", #alternate_child)],
                         )
                     },
@@ -279,13 +277,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                 add_structural_case(
                     control,
                     &format!("Slot.{}", slot.name),
-                    wrap_structural(
-                        control,
-                        quote! {
-                            #control_name::new()
-                                .slots(std::iter::empty::<SlotView<#slot_type>>())
-                        },
-                    ),
+                    wrap_structural(control, quote! { #control_name::new() }),
                     wrap_structural(control, initial),
                     wrap_structural(control, alternate),
                     &mut structural_builders,
@@ -303,9 +295,64 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             let case_name = format!("event.{}.{}", control.name, event.name);
             let control_name = ident(&control.name);
             let field = ident(&event.field);
+            let subscription_delta = usize::from(!control.event_always_active(event));
+            let cleared = wrap_control(control, quote! { #control_name::new() });
+            if event.routed {
+                let component = ident(&format!("{}{}EventSurface", control.name, event.name));
+                let initial = wrap_control(
+                    control,
+                    quote! {
+                        #control_name::new().#field(context.routed_callback(move |_| {
+                            let _ = marker;
+                            RoutedMessage::bubble(())
+                        }))
+                    },
+                );
+                event_builders.push(quote! {
+                    struct #component;
+
+                    impl Component for #component {
+                        type Input = usize;
+                        type Message = ();
+
+                        fn create(
+                            _input: &Self::Input,
+                            _context: &ComponentContext<Self>,
+                        ) -> Self {
+                            Self
+                        }
+
+                        fn view(
+                            &self,
+                            input: &Self::Input,
+                            context: &mut ViewContext<Self>,
+                        ) -> View {
+                            let marker = *input;
+                            match marker {
+                                0 | 3 => #cleared,
+                                1 | 2 => #initial,
+                                _ => unreachable!(),
+                            }
+                        }
+                    }
+
+                    fn #function(stage: usize) -> View {
+                        View::component::<#component>(stage)
+                    }
+                });
+                cases.push(quote! {
+                    SurfaceCase {
+                        name: #case_name,
+                        kind: SurfaceKind::Event,
+                        stages: 4,
+                        subscription_delta: Some(#subscription_delta),
+                        build: #function,
+                    }
+                });
+                continue;
+            }
             let first_callback = event_callback(event, false);
             let alternate_callback = event_callback(event, true);
-            let cleared = wrap_control(control, quote! { #control_name::new() });
             let initial = wrap_control(
                 control,
                 quote! { #control_name::new().#field(#first_callback) },
@@ -314,7 +361,6 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                 control,
                 quote! { #control_name::new().#field(#alternate_callback) },
             );
-            let subscription_delta = usize::from(!control.event_always_active(event));
             event_builders.push(quote! {
                 fn #function(stage: usize) -> View {
                     match stage {
@@ -390,10 +436,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                 "callback"
             };
             let delivery = event_delivery_owner(control, event);
-            let active_property = event
-                .active_property
-                .as_ref()
-                .map_or_else(|| quote! { None }, |property| quote! { Some(#property) });
+            let active_properties = &event.active_properties;
             quote! {
                 EventSurface {
                     control: #control_name,
@@ -402,7 +445,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                     conversion: #conversion,
                     subscription: #subscription,
                     delivery: #delivery,
-                    active_property: #active_property,
+                    active_properties: &[#(#active_properties),*],
                 }
             }
         })
@@ -450,7 +493,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             pub conversion: &'static str,
             pub subscription: &'static str,
             pub delivery: &'static str,
-            pub active_property: Option<&'static str>,
+            pub active_properties: &'static [&'static str],
         }
 
         pub struct CapabilityPropertySurface {
@@ -483,13 +526,13 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
         fn extension_tooltip(stage: usize) -> View {
             match stage {
                 0 | 3 => TextBlock::new().text("owner").into(),
-                1 => TextBlock::new().text("owner").tooltip("surface a"),
+                1 => TextBlock::new().text("owner").tooltip("surface a").into(),
                 2 => TextBlock::new().text("owner").tooltip_with(Tooltip::rich(
                     StackPanel::new().children((
                         TextBlock::new().text("surface b"),
                         TextBlock::new().text("detail"),
                     )),
-                )),
+                )).into(),
                 _ => unreachable!(),
             }
         }
@@ -499,7 +542,8 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                 0 | 3 => Button::new().content(TextBlock::new().text("owner")),
                 1 => Button::new()
                     .content(TextBlock::new().text("owner"))
-                    .flyout("surface a"),
+                    .flyout("surface a")
+                    .into(),
                 2 => Button::new()
                     .content(TextBlock::new().text("owner"))
                     .flyout_with(Flyout::rich(
@@ -507,7 +551,8 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                             TextBlock::new().text("surface b"),
                             TextBlock::new().text("detail"),
                         )),
-                    )),
+                    ))
+                    .into(),
                 _ => unreachable!(),
             }
         }
@@ -523,7 +568,8 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                             MenuItem::separator("separator"),
                         ],
                         |_| {},
-                    )),
+                    ))
+                    .into(),
                 2 => Button::new()
                     .content(TextBlock::new().text("owner"))
                     .menu(Menu::new(
@@ -533,7 +579,8 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                             [MenuItem::item("email", "Email")],
                         )],
                         |_| {},
-                    )),
+                    ))
+                    .into(),
                 _ => unreachable!(),
             }
         }
@@ -547,14 +594,16 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                         [CommandBarCommand::button("bold", "Bold")],
                         [CommandBarCommand::button("copy", "Copy")],
                         |_| {},
-                    )),
+                    ))
+                    .into(),
                 2 => Button::new()
                     .content(TextBlock::new().text("owner"))
                     .command_bar_flyout(CommandBarFlyout::new(
                         [CommandBarCommand::separator("separator")],
                         [CommandBarCommand::button("paste", "Paste")],
                         |_| {},
-                    )),
+                    ))
+                    .into(),
                 _ => unreachable!(),
             }
         }
@@ -872,10 +921,13 @@ fn capability_property_cases() -> Vec<CapabilityPropertyCase> {
             "Rows",
             quote! { Grid::new().children((TextBlock::new(),)) },
             quote! {
-                Grid::new().rows([GridLength::Pixel(20.0)]).children((TextBlock::new(),))
+                Grid::new()
+                    .rows([GridLength::Pixel(20.0).min(10.0).max(30.0)])
+                    .children((TextBlock::new(),))
             },
             quote! {
-                Grid::new().rows([GridLength::Auto, GridLength::STAR])
+                Grid::new()
+                    .rows([GridLength::Pixel(20.0).min(15.0).max(40.0)])
                     .children((TextBlock::new(),))
             },
         ),
@@ -884,10 +936,13 @@ fn capability_property_cases() -> Vec<CapabilityPropertyCase> {
             "Columns",
             quote! { Grid::new().children((TextBlock::new(),)) },
             quote! {
-                Grid::new().columns([GridLength::Pixel(20.0)]).children((TextBlock::new(),))
+                Grid::new()
+                    .columns([GridLength::Pixel(20.0).min(10.0).max(30.0)])
+                    .children((TextBlock::new(),))
             },
             quote! {
-                Grid::new().columns([GridLength::Auto, GridLength::STAR])
+                Grid::new()
+                    .columns([GridLength::Pixel(20.0).min(15.0).max(40.0)])
                     .children((TextBlock::new(),))
             },
         ),
@@ -970,14 +1025,6 @@ fn wrap_control(
     match control.placement {
         ResolvedPlacement::Visual | ResolvedPlacement::Declaration => {
             quote! { Grid::new().children((#value,)) }
-        }
-        ResolvedPlacement::WindowLifetime if !control.slots.is_empty() => {
-            let slot_type = ident(&format!("{}Slot", control.name));
-            quote! {
-                Grid::new().children((
-                    (#value).slots(std::iter::empty::<SlotView<#slot_type>>()),
-                ))
-            }
         }
         ResolvedPlacement::WindowLifetime => quote! { Grid::new().children((#value,)) },
         ResolvedPlacement::TooltipAttachment => unreachable!(),

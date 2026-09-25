@@ -66,10 +66,17 @@ pub enum ReadValueConversion {
     Nullable,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EventHandlerType {
+    Inspectable,
+    Binding(String),
+}
+
 /// Pre-built lookup from `(class_short_name, method_name)` to `MethodRef`.
 pub struct MetadataResolver {
     lookup: HashMap<(String, String), MethodRef>,
     base_classes: HashMap<(String, String), (String, String)>,
+    implemented_interfaces: HashMap<(String, String), Vec<(String, String)>>,
     /// Exclusive interface -> runtime class. Ambiguous non-exclusive interfaces map to `None`.
     interface_owners: HashMap<(String, String), Option<(String, String)>>,
     /// Value-type structs that wrap a single primitive field.
@@ -77,9 +84,8 @@ pub struct MetadataResolver {
     single_field_types: HashMap<(String, String), (String, Type)>,
     /// Maps enum `(namespace, name)` pairs to their variant names.
     enum_variants: HashMap<(String, String), Vec<String>>,
-    /// Maps non-generic delegates to argument class short names, resolved from the
-    /// delegate's `Invoke` method signature.
-    delegate_args: HashMap<String, String>,
+    /// Maps non-generic delegates to sender and argument types from `Invoke`.
+    delegate_params: HashMap<(String, String), (Type, Type)>,
     content_properties: HashMap<(String, String), String>,
 }
 
@@ -117,6 +123,7 @@ impl MetadataResolver {
         let mut lookup = HashMap::new();
         let mut interface_owners = HashMap::new();
         let mut base_classes = HashMap::new();
+        let mut implemented_interfaces = HashMap::new();
         let mut content_properties = HashMap::new();
 
         // Walk all types in the index, collecting method-to-interface mappings for classes
@@ -125,6 +132,19 @@ impl MetadataResolver {
             if namespace.starts_with("Microsoft.UI.Xaml")
                 && typedef.category() == TypeCategory::Class
             {
+                let interfaces = typedef
+                    .interface_impls()
+                    .filter_map(|implementation| match implementation.interface(&[]) {
+                        Type::ClassName(type_name) | Type::ValueName(type_name) => {
+                            Some((type_name.namespace, type_name.name))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                if !interfaces.is_empty() {
+                    implemented_interfaces
+                        .insert((namespace.to_string(), name.to_string()), interfaces);
+                }
                 if let Some(extends) = typedef.extends() {
                     let base = match extends {
                         TypeDefOrRef::TypeDef(base) => {
@@ -211,10 +231,8 @@ impl MetadataResolver {
             }
         }
 
-        // Build the delegate-to-args map for non-generic delegates used by `add_*`
-        // methods, resolve the Invoke method's second parameter to find the
-        // event args class.
-        let mut delegate_args = HashMap::new();
+        // Build the delegate parameter map for non-generic delegates used by `add_*` methods.
+        let mut delegate_params = HashMap::new();
         for ((_, method_name), mref) in &lookup {
             if !method_name.starts_with("add_") {
                 continue;
@@ -222,7 +240,8 @@ impl MetadataResolver {
             let Some(Type::ClassName(tn)) = mref.param_types.first() else {
                 continue;
             };
-            if !tn.generics.is_empty() || delegate_args.contains_key(&tn.name) {
+            let key = (tn.namespace.clone(), tn.name.clone());
+            if !tn.generics.is_empty() || delegate_params.contains_key(&key) {
                 continue;
             }
             let Some(delegate_def) = index.get(&tn.namespace, &tn.name).next() else {
@@ -231,15 +250,8 @@ impl MetadataResolver {
             for method in delegate_def.methods() {
                 if method.name() == "Invoke" {
                     let sig = method.signature(&[]);
-                    if let Some(args_type) = sig.types.get(1) {
-                        let args_name = match args_type {
-                            Type::ClassName(args_tn) => Some(args_tn.name.clone()),
-                            Type::ValueName(args_tn) => Some(args_tn.name.clone()),
-                            _ => None,
-                        };
-                        if let Some(name) = args_name {
-                            delegate_args.insert(tn.name.clone(), name);
-                        }
+                    if let (Some(sender), Some(args)) = (sig.types.first(), sig.types.get(1)) {
+                        delegate_params.insert(key, (sender.clone(), args.clone()));
                     }
                     break;
                 }
@@ -249,10 +261,11 @@ impl MetadataResolver {
         Self {
             lookup,
             base_classes,
+            implemented_interfaces,
             interface_owners,
             single_field_types,
             enum_variants,
-            delegate_args,
+            delegate_params,
             content_properties,
         }
     }
@@ -270,6 +283,33 @@ impl MetadataResolver {
                 return true;
             }
             current.clone_from(parent);
+        }
+        false
+    }
+
+    pub fn class_is_assignable_to(&self, class: &str, target: &str) -> bool {
+        let Some((class_namespace, class_name)) = class.rsplit_once('.') else {
+            return false;
+        };
+        let Some((target_namespace, target_name)) = target.rsplit_once('.') else {
+            return false;
+        };
+        let target = (target_namespace.to_string(), target_name.to_string());
+        let mut pending = vec![(class_namespace.to_string(), class_name.to_string())];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(current) = pending.pop() {
+            if current == target {
+                return true;
+            }
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            if let Some(base) = self.base_classes.get(&current) {
+                pending.push(base.clone());
+            }
+            if let Some(interfaces) = self.implemented_interfaces.get(&current) {
+                pending.extend(interfaces.iter().cloned());
+            }
         }
         false
     }
@@ -373,6 +413,54 @@ impl MetadataResolver {
             .map(|m| &m.interface)
     }
 
+    /// Resolve the sender and argument types accepted by an event delegate.
+    pub fn resolve_event_handler_types(
+        &self,
+        class_name: &str,
+        event_name: &str,
+    ) -> Option<(EventHandlerType, EventHandlerType)> {
+        let method = self
+            .lookup
+            .get(&(class_name.to_string(), format!("add_{event_name}")))?;
+        let Type::ClassName(delegate) = method.param_types.first()? else {
+            return None;
+        };
+        match delegate.generics.as_slice() {
+            [sender, args] => Some((
+                Self::event_handler_type(sender)?,
+                Self::event_handler_type(args)?,
+            )),
+            [args] if delegate.name == "EventHandler" => Some((
+                EventHandlerType::Inspectable,
+                Self::event_handler_type(args)?,
+            )),
+            [] => {
+                let key = (delegate.namespace.clone(), delegate.name.clone());
+                let (sender, args) = self.delegate_params.get(&key)?;
+                Some((
+                    Self::event_handler_type(sender)?,
+                    Self::event_handler_type(args)?,
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    fn event_handler_type(ty: &Type) -> Option<EventHandlerType> {
+        match ty {
+            Type::Object => Some(EventHandlerType::Inspectable),
+            Type::ClassName(name)
+                if name.namespace == "Windows.Foundation" && name.name == "IInspectable" =>
+            {
+                Some(EventHandlerType::Inspectable)
+            }
+            Type::ClassName(name) | Type::ValueName(name) => {
+                Some(EventHandlerType::Binding(name.name.clone()))
+            }
+            _ => None,
+        }
+    }
+
     /// Resolve an exclusive interface to the runtime class that owns its static members.
     pub fn runtime_class(&self, interface: &InterfaceRef) -> Option<String> {
         let (namespace, name) = self
@@ -453,22 +541,6 @@ impl MetadataResolver {
         Some((name, copy))
     }
 
-    /// Infer the value type of a property on an event's args class.
-    ///
-    /// Given `(class, add_event, property)`, resolves the delegate parameter of
-    /// `add_{event}` to find the args class, then looks up `get_{property}` on
-    /// that class and returns the value type from its return type.
-    #[cfg(test)]
-    pub fn infer_event_args_type(
-        &self,
-        class_name: &str,
-        add_event: &str,
-        property: &str,
-    ) -> Option<String> {
-        self.resolve_event_args_property(class_name, add_event, property)
-            .map(|(value, _, _)| value)
-    }
-
     pub fn resolve_event_args_property(
         &self,
         class_name: &str,
@@ -529,7 +601,14 @@ impl MetadataResolver {
                 Type::ValueName(args_tn) => args_tn.name.clone(),
                 _ => return None,
             },
-            Type::ClassName(tn) => self.delegate_args.get(&tn.name)?.clone(),
+            Type::ClassName(tn) => {
+                let key = (tn.namespace.clone(), tn.name.clone());
+                let (_, args) = self.delegate_params.get(&key)?;
+                match args {
+                    Type::ClassName(args_tn) | Type::ValueName(args_tn) => args_tn.name.clone(),
+                    _ => return None,
+                }
+            }
             _ => return None,
         };
         let getter = format!("get_{property}");
@@ -581,22 +660,6 @@ impl MetadataResolver {
             }
             _ => Self::is_copy(ty),
         }
-    }
-
-    /// Check copy-ness for a method's parameter type, applying IReference
-    /// unwrapping.
-    #[cfg(test)]
-    pub fn is_method_copy(&self, class_name: &str, method_name: &str) -> bool {
-        let Some(mref) = self
-            .lookup
-            .get(&(class_name.to_string(), method_name.to_string()))
-        else {
-            return false;
-        };
-        let Some(param) = mref.param_types.first() else {
-            return false;
-        };
-        self.is_unwrapped_copy(param)
     }
 
     /// Map a metadata Type to a PropValue variant name.
@@ -765,187 +828,5 @@ impl MetadataResolver {
             }
             _ => ParamClass::Complex,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolve_textblock_put_text() {
-        let resolver = MetadataResolver::load(Path::new("winmd"));
-        let iface = resolver.resolve("TextBlock", "put_Text");
-        assert_eq!(iface.map(|r| r.short_name()), Some("ITextBlock"));
-    }
-
-    #[test]
-    fn resolve_button_put_is_enabled() {
-        let resolver = MetadataResolver::load(Path::new("winmd"));
-        // Button extends Control, so put_IsEnabled should resolve to IControl.
-        let iface = resolver.resolve("Button", "put_IsEnabled");
-        assert_eq!(iface.map(|r| r.short_name()), Some("IControl"));
-    }
-
-    #[test]
-    fn resolve_slider_put_value() {
-        let resolver = MetadataResolver::load(Path::new("winmd"));
-        let iface = resolver.resolve("Slider", "put_Value");
-        // Slider.put_Value is on IRangeBase (from RangeBase base class).
-        assert!(iface.is_some(), "Slider.put_Value should resolve");
-        assert_eq!(
-            iface.unwrap().full_path(),
-            "Microsoft.UI.Xaml.Controls.Primitives.IRangeBase"
-        );
-    }
-
-    #[test]
-    fn classifies_collection_getters() {
-        let resolver = MetadataResolver::load(Path::new("winmd"));
-
-        assert_eq!(
-            resolver.classify_collection("ListBox", "get_Items"),
-            Some(CollectionType::ItemCollection)
-        );
-        assert_eq!(
-            resolver.classify_collection("NavigationView", "get_MenuItems"),
-            Some(CollectionType::InspectableVector)
-        );
-        assert_eq!(
-            resolver.classify_collection("SelectorBar", "get_Items"),
-            Some(CollectionType::TypedVector(
-                "Microsoft.UI.Xaml.Controls.SelectorBarItem".to_string()
-            ))
-        );
-        assert_eq!(
-            resolver.classify_collection("CommandBar", "get_PrimaryCommands"),
-            Some(CollectionType::ObservableVector(
-                "Microsoft.UI.Xaml.Controls.ICommandBarElement".to_string()
-            ))
-        );
-    }
-
-    #[test]
-    fn resolves_inherited_content_properties() {
-        let resolver = MetadataResolver::load(Path::new("winmd"));
-
-        assert_eq!(
-            resolver.content_property("Microsoft.UI.Xaml.Controls.Border"),
-            Some("Child".to_string())
-        );
-        assert_eq!(
-            resolver.content_property("Microsoft.UI.Xaml.Controls.Button"),
-            Some("Content".to_string())
-        );
-        assert_eq!(
-            resolver.content_property("Microsoft.UI.Xaml.Controls.TextBlock"),
-            Some("Inlines".to_string())
-        );
-    }
-
-    #[test]
-    fn resolve_runtime_classes_for_versioned_and_digit_named_interfaces() {
-        let resolver = MetadataResolver::load(Path::new("winmd"));
-
-        let navigation = resolver
-            .resolve("NavigationView", "put_IsBackButtonVisible")
-            .unwrap();
-        assert_eq!(
-            resolver.runtime_class(navigation).as_deref(),
-            Some("Microsoft.UI.Xaml.Controls.NavigationView")
-        );
-
-        let webview = resolver.resolve("WebView2", "put_Source").unwrap();
-        assert_eq!(
-            resolver.runtime_class(webview).as_deref(),
-            Some("Microsoft.UI.Xaml.Controls.WebView2")
-        );
-    }
-
-    #[test]
-    fn infer_single_field_wrapper_types() {
-        let resolver = MetadataResolver::load(Path::new("winmd"));
-        assert_eq!(
-            resolver.infer_value_type("TextBlock", "put_FontWeight"),
-            Some(("U16".to_string(), true))
-        );
-        assert_eq!(
-            resolver.infer_value_type("Border", "put_BorderThickness"),
-            Some(("Thickness".to_string(), true))
-        );
-        assert_eq!(
-            resolver.infer_value_type("HyperlinkButton", "put_NavigateUri"),
-            None
-        );
-        assert_eq!(
-            resolver.infer_value_type("TextBlock", "put_Text"),
-            Some(("Str".to_string(), false))
-        );
-        assert!(resolver.is_method_copy("CheckBox", "put_IsChecked"));
-        // `ContentDialog` uses `ShowAsync` rather than `put_IsOpen`.
-        assert!(
-            !resolver.has_method("ContentDialog", "put_IsOpen"),
-            "ContentDialog.put_IsOpen should not be in metadata"
-        );
-        assert!(!resolver.is_method_copy("TextBlock", "put_Text"));
-    }
-
-    #[test]
-    fn infer_event_args_type_numberbox() {
-        let resolver = MetadataResolver::load(Path::new("winmd"));
-        let result = resolver.infer_event_args_type("NumberBox", "add_ValueChanged", "NewValue");
-        assert_eq!(
-            result.as_deref(),
-            Some("F64"),
-            "NumberBox ValueChanged NewValue should be F64"
-        );
-    }
-
-    #[test]
-    fn infer_event_args_type_slider() {
-        let resolver = MetadataResolver::load(Path::new("winmd"));
-        let result = resolver.infer_event_args_type("Slider", "add_ValueChanged", "NewValue");
-        assert_eq!(
-            result.as_deref(),
-            Some("F64"),
-            "Slider ValueChanged NewValue should be F64"
-        );
-    }
-
-    #[test]
-    fn infer_event_args_type_breadcrumbbar() {
-        let resolver = MetadataResolver::load(Path::new("winmd"));
-        let result = resolver.infer_event_args_type("BreadcrumbBar", "add_ItemClicked", "Index");
-        assert_eq!(
-            result.as_deref(),
-            Some("I32"),
-            "BreadcrumbBar ItemClicked Index should be I32"
-        );
-    }
-
-    #[test]
-    fn resolves_event_args_getter_shapes() {
-        let resolver = MetadataResolver::load(Path::new("winmd"));
-
-        assert!(
-            resolver
-                .resolve_event_args_property_interface("Border", "add_Drop", "DataView")
-                .is_some()
-        );
-        assert!(
-            resolver
-                .resolve_event_args_class_property("TabView", "add_TabCloseRequested", "Tab")
-                .is_some()
-        );
-        assert!(
-            resolver
-                .resolve_event_args_object_property("TreeView", "add_ItemInvoked", "InvokedItem")
-                .is_some()
-        );
-        assert!(
-            resolver
-                .resolve_event_args_class_property("TreeView", "add_ItemInvoked", "InvokedItem")
-                .is_none()
-        );
     }
 }

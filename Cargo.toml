@@ -22,6 +22,9 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(windows_slim_errors, windo
 missing_unsafe_on_extern = "warn"
 unused_qualifications = "warn"
 
+[workspace.lints.cargo]
+unused_dependencies = "deny"
+
 [workspace.lints.clippy]
 type_complexity = "allow"
 manual_c_str_literals = "allow" # windows-bindgen needs to switch to signed char for this to work
@@ -62,7 +65,9 @@ windows-implement = { version = "0.100.0", path = "crates/libs/implement", defau
 windows-interface = { version = "0.100.0", path = "crates/libs/interface", default-features = false }
 windows-link = { version = "0.100.0", path = "crates/libs/link", default-features = false }
 windows-metadata = { version = "0.100.0", path = "crates/libs/metadata", default-features = false }
+windows-notifyicon = { version = "0.100.0", path = "crates/libs/notifyicon", default-features = false }
 windows-numerics = { version = "0.100.0", path = "crates/libs/numerics", default-features = false }
+windows-pickers = { version = "0.100.0", path = "crates/libs/pickers", default-features = false }
 windows-rdl = { version = "0.100.0", path = "crates/libs/rdl", default-features = false }
 windows-reactor = { version = "0.100.0", path = "crates/libs/reactor", default-features = false }
 windows-reactor-setup = { version = "0.100.0", path = "crates/libs/reactor-setup", default-features = false }

@@ -5,29 +5,96 @@ use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::{NativeWork, NodeId, RuntimeError, WindowToken};
-use crate::element::{Callback, View};
+use super::*;
+use crate::core::{Command, ComponentToken, NativeWork, NodeId, RuntimeError, WindowToken};
 
 const IMPERATIVE_QUEUE_CAPACITY: usize = 4_096;
 static NEXT_OBSERVATION_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_BINDING_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
 pub(crate) enum HostRequest {
-    CloseWindow { identity: WindowToken },
-    OpenWindow { identity: WindowToken, root: View },
+    Activate {
+        identity: WindowToken,
+    },
+    Close {
+        identity: WindowToken,
+    },
+    Open {
+        identity: WindowToken,
+        root: View,
+    },
+    Run {
+        identity: WindowToken,
+        operation: WindowOperation,
+    },
+}
+
+pub(crate) struct WindowOperation {
+    state: Weak<WindowRequestState>,
+    owner: ComponentToken,
+    work: Option<Box<dyn FnOnce(isize)>>,
+}
+
+impl fmt::Debug for WindowOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WindowOperation")
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
+}
+
+impl WindowOperation {
+    fn new(
+        owner: ComponentToken,
+        work: Box<dyn FnOnce(isize)>,
+        state: Weak<WindowRequestState>,
+    ) -> Self {
+        Self {
+            state,
+            owner,
+            work: Some(work),
+        }
+    }
+
+    pub(crate) fn owner(&self) -> ComponentToken {
+        self.owner
+    }
+
+    pub(crate) fn run(mut self, hwnd: isize) {
+        (self.work.take().unwrap())(hwnd);
+    }
+}
+
+impl Drop for WindowOperation {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.upgrade() {
+            state.operation_busy.set(false);
+        }
+    }
 }
 
 struct WindowRequestState {
+    operation_busy: Cell<bool>,
+    data: RefCell<WindowRequestData>,
+}
+
+struct WindowRequestData {
     active: Option<ActiveWindowRequests>,
     lifecycle: WindowRequestLifecycle,
+    staged_activate: bool,
     staged_close: bool,
     staged_opens: Vec<View>,
+    staged_operation: Option<WindowOperation>,
 }
 
 #[derive(Default)]
 struct ActiveWindowRequests {
+    activate: bool,
     close: bool,
     opens: Vec<View>,
+    operation: Option<WindowOperation>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -41,24 +108,29 @@ enum WindowRequestLifecycle {
 #[derive(Clone)]
 pub(crate) struct WindowEndpoint {
     identity: WindowToken,
-    state: Rc<RefCell<WindowRequestState>>,
+    state: Rc<WindowRequestState>,
 }
 
 impl WindowEndpoint {
     pub(crate) fn new(identity: WindowToken) -> Self {
         Self {
             identity,
-            state: Rc::new(RefCell::new(WindowRequestState {
-                active: None,
-                lifecycle: WindowRequestLifecycle::Open,
-                staged_close: false,
-                staged_opens: Vec::new(),
-            })),
+            state: Rc::new(WindowRequestState {
+                operation_busy: Cell::new(false),
+                data: RefCell::new(WindowRequestData {
+                    active: None,
+                    lifecycle: WindowRequestLifecycle::Open,
+                    staged_activate: false,
+                    staged_close: false,
+                    staged_opens: Vec::new(),
+                    staged_operation: None,
+                }),
+            }),
         }
     }
 
     pub(crate) fn begin(&self) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.data.borrow_mut();
         assert!(
             state.active.is_none(),
             "component lifecycle invocation reentered"
@@ -67,36 +139,53 @@ impl WindowEndpoint {
     }
 
     pub(crate) fn finish(&self) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.data.borrow_mut();
         let active = state
             .active
             .take()
             .expect("component lifecycle invocation was not active");
+        state.staged_activate |= active.activate;
         state.staged_close |= active.close;
         state.staged_opens.extend(active.opens);
+        if let Some(operation) = active.operation {
+            assert!(state.staged_operation.is_none());
+            state.staged_operation = Some(operation);
+        }
     }
 
     pub(crate) fn take_requests(&self) -> Vec<HostRequest> {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.data.borrow_mut();
         let mut requests = state
             .staged_opens
             .drain(..)
-            .map(|root| HostRequest::OpenWindow {
+            .map(|root| HostRequest::Open {
                 identity: self.identity,
                 root,
             })
             .collect::<Vec<_>>();
+        if state.staged_activate {
+            state.staged_activate = false;
+            requests.push(HostRequest::Activate {
+                identity: self.identity,
+            });
+        }
         if state.staged_close {
             state.staged_close = false;
-            requests.push(HostRequest::CloseWindow {
+            state.staged_operation = None;
+            requests.push(HostRequest::Close {
                 identity: self.identity,
+            });
+        } else if let Some(operation) = state.staged_operation.take() {
+            requests.push(HostRequest::Run {
+                identity: self.identity,
+                operation,
             });
         }
         requests
     }
 
     pub(crate) fn close(&self) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.data.borrow_mut();
         state.lifecycle = match state.lifecycle {
             WindowRequestLifecycle::Open | WindowRequestLifecycle::Closed => {
                 WindowRequestLifecycle::Closed
@@ -106,12 +195,14 @@ impl WindowEndpoint {
             }
         };
         state.active = None;
+        state.staged_activate = false;
         state.staged_close = false;
         state.staged_opens.clear();
+        state.staged_operation = None;
     }
 
     pub(crate) fn commit_close(&self) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.data.borrow_mut();
         state.lifecycle = match state.lifecycle {
             WindowRequestLifecycle::Open | WindowRequestLifecycle::CloseCommitted => {
                 WindowRequestLifecycle::CloseCommitted
@@ -122,14 +213,15 @@ impl WindowEndpoint {
         };
     }
 
-    pub(crate) fn reference(&self) -> WindowRef {
+    pub(crate) fn reference(&self, owner: ComponentToken) -> WindowRef {
         WindowRef {
             endpoint: self.clone(),
+            owner,
         }
     }
 
     fn request_open(&self, root: View) -> bool {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.data.borrow_mut();
         if state.lifecycle != WindowRequestLifecycle::Open {
             return false;
         }
@@ -137,6 +229,35 @@ impl WindowEndpoint {
             return false;
         };
         active.opens.push(root);
+        true
+    }
+
+    fn request_activate(&self) -> bool {
+        let mut state = self.state.data.borrow_mut();
+        if state.lifecycle != WindowRequestLifecycle::Open {
+            return false;
+        }
+        let Some(active) = state.active.as_mut() else {
+            return false;
+        };
+        active.activate = true;
+        true
+    }
+
+    fn request_run(&self, owner: ComponentToken, work: Box<dyn FnOnce(isize)>) -> bool {
+        let mut state = self.state.data.borrow_mut();
+        if state.lifecycle != WindowRequestLifecycle::Open || self.state.operation_busy.get() {
+            return false;
+        }
+        let Some(active) = state.active.as_mut() else {
+            return false;
+        };
+        self.state.operation_busy.set(true);
+        active.operation = Some(WindowOperation::new(
+            owner,
+            work,
+            Rc::downgrade(&self.state),
+        ));
         true
     }
 }
@@ -148,13 +269,20 @@ impl WindowEndpoint {
 #[derive(Clone)]
 pub struct WindowRef {
     endpoint: WindowEndpoint,
+    owner: ComponentToken,
 }
 
 impl WindowRef {
+    /// Requests that the owning window activate after the current component turn publishes.
+    #[must_use = "false means there is no active component publication"]
+    pub fn request_activate(&self) -> bool {
+        self.endpoint.request_activate()
+    }
+
     /// Requests that the owning window close after the current component turn publishes.
     #[must_use = "false means there is no active component publication"]
     pub fn request_close(&self) -> bool {
-        let mut state = self.endpoint.state.borrow_mut();
+        let mut state = self.endpoint.state.data.borrow_mut();
         if state.lifecycle != WindowRequestLifecycle::Open {
             return false;
         }
@@ -168,7 +296,7 @@ impl WindowRef {
     #[cfg(test)]
     pub(crate) fn close_committed(&self) -> bool {
         matches!(
-            self.endpoint.state.borrow().lifecycle,
+            self.endpoint.state.data.borrow().lifecycle,
             WindowRequestLifecycle::CloseCommitted | WindowRequestLifecycle::ClosedCommitted
         )
     }
@@ -176,11 +304,15 @@ impl WindowRef {
     pub(crate) fn request_open(&self, root: View) -> bool {
         self.endpoint.request_open(root)
     }
+
+    pub(crate) fn request_run(&self, work: Box<dyn FnOnce(isize)>) -> bool {
+        self.endpoint.request_run(self.owner, work)
+    }
 }
 
 impl fmt::Debug for WindowRef {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = self.endpoint.state.borrow();
+        let state = self.endpoint.state.data.borrow();
         formatter
             .debug_struct("WindowRef")
             .field("active", &state.active.is_some())
@@ -205,6 +337,41 @@ impl fmt::Debug for WindowRef {
 
 pub(crate) mod sealed {
     pub trait Sealed {}
+}
+
+/// A temporary view of a Reactor window's native handle.
+///
+/// Reactor creates this value only while running work queued with
+/// [`ComponentContext::run_window`](crate::ComponentContext::run_window). The handle belongs to
+/// the component's current window, is valid for the duration of that call, and cannot be sent to
+/// or shared with another thread.
+///
+/// ```compile_fail
+/// fn require_send<T: Send>() {}
+/// require_send::<windows_reactor::WindowHandle<'static>>();
+/// ```
+///
+/// ```compile_fail
+/// fn require_sync<T: Sync>() {}
+/// require_sync::<windows_reactor::WindowHandle<'static>>();
+/// ```
+pub struct WindowHandle<'a> {
+    raw: isize,
+    marker: PhantomData<(&'a mut (), Rc<()>)>,
+}
+
+impl WindowHandle<'_> {
+    pub(crate) fn new(raw: isize) -> Self {
+        Self {
+            raw,
+            marker: PhantomData,
+        }
+    }
+
+    /// Returns the native `HWND`.
+    pub fn as_raw(&self) -> *mut ::core::ffi::c_void {
+        self.raw as _
+    }
 }
 
 /// A native control that can be bound to an [`ElementRef`].
@@ -285,7 +452,7 @@ impl<T: FocusControl> ElementRef<T> {
     }
 }
 
-impl ElementRef<crate::WebView2> {
+impl ElementRef<WebView2> {
     /// Requests creation of the CoreWebView2 object for the currently published control.
     ///
     /// The returned COM object is the application-facing WebView2 core, not the XAML control
@@ -312,7 +479,7 @@ impl ElementRef<crate::WebView2> {
     }
 }
 
-impl ElementRef<crate::SwapChainPanel> {
+impl ElementRef<SwapChainPanel> {
     /// Attaches an application-owned DXGI swap chain to the published panel.
     #[must_use = "false means the reference is currently unbound"]
     pub fn request_set_swap_chain(
@@ -346,6 +513,42 @@ impl ElementRef<crate::SwapChainPanel> {
         )))
     }
 
+    /// Requests one deferred UI-thread frame for the published panel.
+    ///
+    /// Unlike [`SwapChainPanelEvent::Rendering`], this request is dispatched independently of the
+    /// XAML composition rendering pass. It is intended for resize and attachment continuations.
+    #[must_use = "false means the reference is currently unbound"]
+    pub fn request_surface_frame(
+        &self,
+        completion: impl Fn(Result<(), SwapChainPanelError>) + 'static,
+    ) -> bool {
+        let Some(binding) = self.target.borrow().binding.clone() else {
+            return false;
+        };
+        let target = Rc::downgrade(&self.target);
+        let binding_id = binding.id;
+        binding.endpoint.enqueue(NativeWork {
+            identity: binding.identity,
+            work: ImperativeRequest::RequestSwapChainPanelFrame {
+                node: binding.node,
+                completion: Callback::new(move |result: Result<(), RuntimeError>| {
+                    let current = target.upgrade().is_some_and(|target| {
+                        target
+                            .borrow()
+                            .binding
+                            .as_ref()
+                            .is_some_and(|binding| binding.id == binding_id)
+                    });
+                    completion(if current {
+                        result.map_err(SwapChainPanelError::from_runtime)
+                    } else {
+                        Err(SwapChainPanelError::Unavailable)
+                    });
+                }),
+            },
+        })
+    }
+
     fn request_swap_chain(
         &self,
         swap_chain: Option<windows_core::IUnknown>,
@@ -367,7 +570,7 @@ impl ElementRef<crate::SwapChainPanel> {
     }
 }
 
-impl ElementRef<crate::Image> {
+impl ElementRef<Image> {
     /// Assigns an application-owned native ImageSource to the published image.
     #[must_use = "false means the reference is currently unbound"]
     pub fn request_set_native_source(
@@ -403,7 +606,7 @@ impl ElementRef<crate::Image> {
     }
 }
 
-impl ElementRef<crate::Grid> {
+impl ElementRef<Grid> {
     /// Observes an application-owned lifted Composition host across published bindings.
     ///
     /// Registration is accepted before publication. Each new binding creates a native
@@ -490,6 +693,8 @@ pub type WebView2Error = IntegrationError;
 pub enum SwapChainPanelEvent {
     /// Reports panel dimensions in DIPs and the pixel scale for each axis.
     Metrics {
+        /// Identifies the current native panel binding.
+        binding: u64,
         width: f64,
         height: f64,
         scale_x: f32,
@@ -572,6 +777,9 @@ impl NativeElementRef {
             }
         }
         let binding = ReferenceBinding {
+            id: NEXT_BINDING_ID
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+                .unwrap_or_else(|_| panic!("element binding identity exhausted")),
             endpoint,
             identity,
             node,
@@ -640,6 +848,7 @@ impl Eq for NativeElementRef {}
 
 #[derive(Clone)]
 struct ReferenceBinding {
+    id: u64,
     endpoint: ImperativeEndpoint,
     identity: WindowToken,
     node: NodeId,
@@ -679,6 +888,7 @@ impl ObservationRegistration {
                 ImperativeRequest::ObserveSwapChainPanel {
                     node,
                     observation: this.id,
+                    binding: binding.id,
                     callback: current_binding_callback(
                         target,
                         registration,
@@ -818,7 +1028,12 @@ pub(crate) enum ImperativeRequest {
     ObserveSwapChainPanel {
         node: NodeId,
         observation: u64,
+        binding: u64,
         callback: Callback<SwapChainPanelEvent>,
+    },
+    RequestSwapChainPanelFrame {
+        node: NodeId,
+        completion: Callback<Result<(), RuntimeError>>,
     },
     SetSwapChain {
         node: NodeId,
@@ -852,29 +1067,93 @@ pub(crate) enum ImperativeRequest {
 }
 
 impl ImperativeRequest {
-    pub(crate) fn complete_unavailable(self) {
+    pub(crate) fn into_command(self) -> (Option<NodeId>, Command) {
         match self {
-            Self::Focus { node, completion } => {
-                _ = completion.call(Err(RuntimeError::MissingNode(node)));
-            }
+            Self::Focus { node, completion } => (Some(node), Command::Focus { node, completion }),
             Self::InitializeWebView2 { node, completion } => {
-                _ = completion.call(Err(RuntimeError::MissingNode(node)));
+                (Some(node), Command::InitializeWebView2 { node, completion })
             }
+            Self::ObserveSwapChainPanel {
+                node,
+                observation,
+                binding,
+                callback,
+            } => (
+                Some(node),
+                Command::ObserveSwapChainPanel {
+                    node,
+                    observation,
+                    binding,
+                    callback,
+                },
+            ),
+            Self::RequestSwapChainPanelFrame { node, completion } => (
+                Some(node),
+                Command::RequestSwapChainPanelFrame { node, completion },
+            ),
             Self::SetSwapChain {
-                node, completion, ..
+                node,
+                swap_chain,
+                completion,
+            } => (
+                Some(node),
+                Command::SetSwapChain {
+                    node,
+                    swap_chain,
+                    completion,
+                },
+            ),
+            Self::SetNativeImageSource {
+                node,
+                source,
+                completion,
+            } => (
+                Some(node),
+                Command::SetNativeImageSource {
+                    node,
+                    source,
+                    completion,
+                },
+            ),
+            Self::ObserveImageScale {
+                node,
+                observation,
+                callback,
+            } => (
+                Some(node),
+                Command::ObserveImageScale {
+                    node,
+                    observation,
+                    callback,
+                },
+            ),
+            Self::ObserveCompositionHost {
+                node,
+                observation,
+                callback,
+            } => (
+                Some(node),
+                Command::ObserveCompositionHost {
+                    node,
+                    observation,
+                    callback,
+                },
+            ),
+            Self::RevokeObservation { node, observation } => {
+                (None, Command::RevokeObservation { node, observation })
             }
-            | Self::SetNativeImageSource {
-                node, completion, ..
-            }
-            | Self::SetCompositionChildVisual {
-                node, completion, ..
-            } => {
-                _ = completion.call(Err(RuntimeError::MissingNode(node)));
-            }
-            Self::ObserveSwapChainPanel { .. }
-            | Self::ObserveImageScale { .. }
-            | Self::ObserveCompositionHost { .. }
-            | Self::RevokeObservation { .. } => {}
+            Self::SetCompositionChildVisual {
+                node,
+                visual,
+                completion,
+            } => (
+                Some(node),
+                Command::SetCompositionChildVisual {
+                    node,
+                    visual,
+                    completion,
+                },
+            ),
         }
     }
 }
@@ -1026,7 +1305,7 @@ impl ImperativeEndpoint {
             match request {
                 QueuedImperative::OneShot(request)
                 | QueuedImperative::Observation { request, .. } => {
-                    request.work.complete_unavailable();
+                    request.work.into_command().1.complete_unavailable();
                 }
             }
         }

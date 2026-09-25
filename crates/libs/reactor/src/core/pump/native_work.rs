@@ -11,6 +11,7 @@ impl<R: NativeRuntime> Pump<R> {
                 || !self.host_events.is_empty()
                 || !self.imperative.is_empty()
                 || !self.realizations.is_empty()
+                || self.window_operation.is_some()
                 || self.components.pending() != 0
                 || !self.dirty_components.is_empty()
                 || self.native_observation_pending)
@@ -35,116 +36,16 @@ impl<R: NativeRuntime> Pump<R> {
             let Some(queued) = self.imperative.pop_front() else {
                 break;
             };
+            let (target, command) = queued.work.into_command();
             if queued.identity != self.identity {
-                queued.work.complete_unavailable();
+                command.complete_unavailable();
                 continue;
             }
-            match queued.work {
-                ImperativeRequest::Focus { node, completion } => {
-                    if self.tree.try_native(node).is_none() {
-                        _ = completion.call(Err(RuntimeError::MissingNode(node)));
-                        continue;
-                    }
-                    commands.push(Command::Focus { node, completion });
-                }
-                ImperativeRequest::InitializeWebView2 { node, completion } => {
-                    if self.tree.try_native(node).is_none() {
-                        _ = completion.call(Err(RuntimeError::MissingNode(node)));
-                        continue;
-                    }
-                    commands.push(Command::InitializeWebView2 { node, completion });
-                }
-                ImperativeRequest::ObserveSwapChainPanel {
-                    node,
-                    observation,
-                    callback,
-                } => {
-                    if self.tree.try_native(node).is_none() {
-                        continue;
-                    }
-                    commands.push(Command::ObserveSwapChainPanel {
-                        node,
-                        observation,
-                        callback,
-                    });
-                }
-                ImperativeRequest::SetSwapChain {
-                    node,
-                    swap_chain,
-                    completion,
-                } => {
-                    if self.tree.try_native(node).is_none() {
-                        _ = completion.call(Err(RuntimeError::MissingNode(node)));
-                        continue;
-                    }
-                    commands.push(Command::SetSwapChain {
-                        node,
-                        swap_chain,
-                        completion,
-                    });
-                }
-                ImperativeRequest::SetNativeImageSource {
-                    node,
-                    source,
-                    completion,
-                } => {
-                    if self.tree.try_native(node).is_none() {
-                        _ = completion.call(Err(RuntimeError::MissingNode(node)));
-                        continue;
-                    }
-                    commands.push(Command::SetNativeImageSource {
-                        node,
-                        source,
-                        completion,
-                    });
-                }
-                ImperativeRequest::ObserveImageScale {
-                    node,
-                    observation,
-                    callback,
-                } => {
-                    if self.tree.try_native(node).is_none() {
-                        continue;
-                    }
-                    commands.push(Command::ObserveImageScale {
-                        node,
-                        observation,
-                        callback,
-                    });
-                }
-                ImperativeRequest::ObserveCompositionHost {
-                    node,
-                    observation,
-                    callback,
-                } => {
-                    if self.tree.try_native(node).is_none() {
-                        continue;
-                    }
-                    commands.push(Command::ObserveCompositionHost {
-                        node,
-                        observation,
-                        callback,
-                    });
-                }
-                ImperativeRequest::RevokeObservation { node, observation } => {
-                    commands.push(Command::RevokeObservation { node, observation });
-                }
-                ImperativeRequest::SetCompositionChildVisual {
-                    node,
-                    visual,
-                    completion,
-                } => {
-                    if self.tree.try_native(node).is_none() {
-                        _ = completion.call(Err(RuntimeError::MissingNode(node)));
-                        continue;
-                    }
-                    commands.push(Command::SetCompositionChildVisual {
-                        node,
-                        visual,
-                        completion,
-                    });
-                }
+            if target.is_some_and(|node| self.tree.try_native(node).is_none()) {
+                command.complete_unavailable();
+                continue;
             }
+            commands.push(command);
         }
         if let Err(error) = self.apply_native_commands(&commands) {
             let PumpError::NativeApplyFailed(native) = error else {
@@ -288,10 +189,17 @@ impl<R: NativeRuntime> Pump<R> {
                 break;
             };
             let identity = queued.identity;
+            let mut event = queued.work;
             if identity != self.identity {
+                if event.claimed_handled() {
+                    self.diagnostics
+                        .push_back(PumpDiagnostic::HandledInputDropped {
+                            node: event.node,
+                            event: event.event,
+                        });
+                }
                 continue;
             }
-            let event = queued.work;
             if matches!(
                 event.event,
                 EventId::OwnedCommandInvoked | EventId::OwnedMenuItemInvoked
@@ -325,16 +233,59 @@ impl<R: NativeRuntime> Pump<R> {
             }
             let observation = {
                 let Some(native) = self.tree.try_native(event.node) else {
+                    if event.claimed_handled() {
+                        self.diagnostics
+                            .push_back(PumpDiagnostic::HandledInputDropped {
+                                node: event.node,
+                                event: event.event,
+                            });
+                    }
                     continue;
                 };
                 let Some(state) = native.events.get(&event.event) else {
+                    if event.claimed_handled() {
+                        self.diagnostics
+                            .push_back(PumpDiagnostic::HandledInputDropped {
+                                node: event.node,
+                                event: event.event,
+                            });
+                    }
                     continue;
                 };
                 if !state.active || state.revision != event.revision {
+                    if event.claimed_handled() {
+                        self.diagnostics
+                            .push_back(PumpDiagnostic::HandledInputDropped {
+                                node: event.node,
+                                event: event.event,
+                            });
+                    }
                     continue;
                 }
                 native.desired.observe_event(event.event, &event.payload)
             };
+            if let Some(message) = event.routed_message_mut() {
+                match message.enqueue() {
+                    DeferredEnqueue::Enqueued => dispatched += 1,
+                    DeferredEnqueue::Full => {
+                        self.events.push_front(NativeWork {
+                            identity,
+                            work: event,
+                        });
+                        break;
+                    }
+                    DeferredEnqueue::Rejected => {
+                        if event.claimed_handled() {
+                            self.diagnostics
+                                .push_back(PumpDiagnostic::HandledInputDropped {
+                                    node: event.node,
+                                    event: event.event,
+                                });
+                        }
+                    }
+                }
+                continue;
+            }
             let selection_observation = match &event.payload {
                 EventPayload::SelectionChange(selected) => match selection_for_event(event.event) {
                     Some(selection) => self.observe_selection(event.node, selection, selected.item),
@@ -347,7 +298,7 @@ impl<R: NativeRuntime> Pump<R> {
                 self.tree
                     .native_mut(event.node)
                     .properties
-                    .insert(property, Some(value));
+                    .insert(property, value);
             }
             if (selection_observation || property_observation) && event.invokes_callback() {
                 self.native_observation_pending = true;
@@ -392,23 +343,23 @@ impl<R: NativeRuntime> Pump<R> {
         selection: SelectionDescriptor,
         selected_item: Option<NodeId>,
     ) -> bool {
-        let Some(slot) = self
-            .tree
-            .children(owner)
-            .iter()
-            .copied()
-            .find(|child| self.tree.kind(*child) == NodeKind::NamedSlot(selection.slot))
-        else {
-            return false;
-        };
         let mut items = Vec::new();
-        for child in self.tree.children(slot).to_vec() {
-            let mut roots = Vec::new();
-            Self::collect_native_roots(&self.tree, child, &mut roots);
-            if let [item] = roots.as_slice()
-                && self.tree.kind(*item) == NodeKind::Native(selection.item)
-            {
-                items.push(*item);
+        let mut roots = Vec::new();
+        for slot in self.tree.children(owner) {
+            let NodeKind::NamedSlot(slot_id) = self.tree.kind(*slot) else {
+                continue;
+            };
+            if !selection.slots.contains(&slot_id) {
+                continue;
+            }
+            for child in self.tree.children(*slot) {
+                roots.clear();
+                Self::collect_native_roots(&self.tree, *child, &mut roots);
+                if let [item] = roots.as_slice()
+                    && self.tree.kind(*item) == NodeKind::Native(selection.item)
+                {
+                    items.push(*item);
+                }
             }
         }
         let mut changed = false;
@@ -426,13 +377,18 @@ impl<R: NativeRuntime> Pump<R> {
                 continue;
             }
             let selected = selected_item == Some(item);
-            let value = Some(PropertyValue::Bool(selected));
-            let item_changed = self
-                .tree
+            let value = PropertyValue::Bool(selected);
+            let item_changed = !matches!(
+                self.tree
+                    .native(item)
+                    .properties
+                    .get(&selection.selected_property),
+                Some(PropertyValue::Bool(current)) if *current == selected
+            );
+            self.tree
                 .native_mut(item)
                 .properties
-                .insert(selection.selected_property, value.clone())
-                != Some(value);
+                .insert(selection.selected_property, value);
             changed |= item_changed;
             if item_changed {
                 let mut current = item;

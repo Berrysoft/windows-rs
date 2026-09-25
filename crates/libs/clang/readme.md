@@ -1,28 +1,41 @@
 ## windows-clang
 
-The [windows-clang](https://crates.io/crates/windows-clang) crate scrapes C/C++ headers with
-libclang and emits **RDL** (Rust Definition Language) source - the text format understood by
-[windows-rdl](https://crates.io/crates/windows-rdl). It is the header-facing front end of the Win32
-metadata pipeline: headers to RDL (this crate) to `.winmd` (windows-rdl).
+The [windows-clang](https://crates.io/crates/windows-clang) crate extracts declarations from C and
+C++ source with libclang and emits [RDL](https://crates.io/crates/windows-rdl). It is the
+header-facing stage of the Windows metadata pipeline:
 
-* [Getting
-  started](https://github.com/microsoft/windows-rs/blob/master/docs/crates/windows-clang.md)
+```text
+headers -> windows-clang -> RDL -> windows-rdl -> WinMD
+```
 
-Start by adding the following to your Cargo.toml file:
+Add the crate to your Cargo.toml:
 
 ```toml
 [dependencies.windows-clang]
 version = "0.100"
 ```
 
-Point it at one or more headers and write the resulting per-header RDL, then feed that RDL to
-`windows_rdl::reader()` to compile a `.winmd`:
+For ordinary header-to-RDL generation, configure and run the high-level builder:
 
 ```rust,no_run
 windows_clang::clang()
     .input("Example.h")
-    .output("rdl")
+    .args(["-x", "c++", "--target=x86_64-pc-windows-msvc"])
+    .reference_default()
     .namespace("Example")
-    .write_by_header()
+    .library("example.dll")
+    .output("Example.rdl")
+    .write()
     .unwrap();
 ```
+
+The builder reads inputs and references, invokes the extractor, emits RDL, and writes the output.
+Use [`Input`][input], `extract`, and `EmitOptions` directly when a generator needs to inspect or
+combine immutable snapshots before emission.
+
+The caller owns libclang installation, compiler arguments, package versions, import-library
+discovery, architecture merging, output promotion, and RDL-to-WinMD compilation. See the [crate
+documentation][docs] for both APIs and the extraction model.
+
+[input]: https://docs.rs/windows-clang/latest/windows_clang/struct.Input.html
+[docs]: https://github.com/microsoft/windows-rs/blob/master/docs/crates/windows-clang.md

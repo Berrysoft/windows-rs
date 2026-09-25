@@ -7,6 +7,7 @@
 - 🚀 [Getting started](../../crates/libs/window/readme.md)
 - 🧩 [Samples](https://github.com/microsoft/windows-rs/tree/master/crates/samples)
 - 📁 [Source](https://github.com/microsoft/windows-rs/tree/master/crates/libs/window)
+- [Notification icon guide](windows-notifyicon.md)
 
 ## When to use it
 
@@ -24,8 +25,8 @@ The crate targets Windows desktop applications. Create and drive a window on the
 its message queue. Interop code receiving `Window::hwnd()` must not retain the handle beyond the
 `Window` lifetime.
 
-The first registered window class sets process DPI awareness to per-monitor v2. Set any different
-process DPI policy before creating a `Window`.
+Window creation attempts to set process DPI awareness to per-monitor v2. Set any different process
+DPI policy before creating a `Window`.
 
 The README contains dependency setup and the minimal create-and-run example.
 
@@ -34,7 +35,8 @@ The README contains dependency setup and the minimal create-and-run example.
 Most integrations need the following sequence:
 
 1. Put shared renderer or controller state behind `Rc<RefCell<_>>` or another UI-thread owner.
-2. Build the window with an `on_resize` closure that updates the hosted content.
+2. Build the window with `on_resize` and `on_close` closures that update and release the hosted
+   content.
 3. Call `create`, then use `client_size` for the initial content size.
 4. Pass `hwnd` to the hosting API.
 5. Choose `run` for an event-driven host or `run_with` for a render loop.
@@ -50,20 +52,29 @@ initial resize messages that arrive after the builder installs its state.
 `client_size` sets the size excluding non-client borders. `style` and `ex_style` replace the
 defaults with raw `WS_*` and `WS_EX_*` values. The defaults are `WS_OVERLAPPEDWINDOW` and no
 extended style. `no_redirection_bitmap` adds `WS_EX_NOREDIRECTIONBITMAP` for content supplied by
-composition.
+composition. `visible(false)` creates a hidden top-level window that can receive messages for
+integrations such as notification-area icons.
 
 `on_message` receives `(hwnd, message, wparam, lparam)` and returns `Option<isize>`. Return
 `Some(result)` only when the application fully handled the message. Return `None` to use the
-crate's built-in handling and `DefWindowProcW`. `on_resize` is the focused alternative for
-`WM_SIZE`; if both are installed and `on_message` handles `WM_SIZE`, the resize callback does not
+crate's built-in handling and `DefWindowProcW`. `on_resize` and `on_move` are focused alternatives
+for `WM_SIZE` and `WM_MOVE`. If `on_message` handles either message, its focused callback does not
 run.
 
-`create` registers the shared window class, creates and shows the window, and returns an error if
-creation fails. `Window::client_size` returns `(0, 0)` if `GetClientRect` fails.
+`on_close` runs before default `WM_CLOSE` processing destroys the window. Use it to close or drop
+hosted resources whose APIs require a live parent HWND. If `on_message` handles `WM_CLOSE`,
+`on_close` does not run.
 
-Dropping a live `Window` calls `DestroyWindow`. An unhandled `WM_DESTROY` posts `WM_QUIT`, so
-closing any window created by this crate ends the thread's message loop. Applications with several
-top-level windows must account for that policy.
+`quit_on_close` controls whether closing the window posts `WM_QUIT`. It defaults to `true` for
+single-window applications. Dropping a window does not post `WM_QUIT`, so cleanup and failed
+creation cannot terminate an application-owned loop. Set the option to `false` when window lifetime
+and application lifetime differ, then call `quit` explicitly when the application should exit.
+
+`create` registers the shared window class, creates the window, shows it when configured as
+visible, and returns an error if creation fails. After native destruction, `Window::hwnd` returns
+null and `Window::client_size` returns `(0, 0)`. `Window::close` sends `WM_CLOSE` through the
+configured close and quit behavior. Dropping a live `Window` calls `DestroyWindow` directly
+without posting `WM_QUIT`.
 
 ## Choosing a message loop
 
@@ -84,9 +95,10 @@ Repeatedly calling `pump` without another wait mechanism spins the CPU.
 ## Messages, reentrancy, and panics
 
 Message dispatch is reentrant: a handler can call a Win32 API that sends another message before the
-first callback returns. The crate temporarily removes both user handlers while either one runs.
-Nested messages therefore use default processing instead of re-entering a closure or borrowing its
-captured `RefCell` again.
+first callback returns. The crate temporarily removes user handlers while one runs. Nested messages
+therefore use default processing instead of re-entering a closure or borrowing its captured
+`RefCell` again. A nested `WM_CLOSE` is deferred until the active handler returns so hosted
+resources can shut down before the native window is destroyed.
 
 This also means a nested `WM_SIZE` triggered inside a handler does not invoke `on_resize`. Apply any
 state update needed by that synchronous operation directly.
@@ -113,13 +125,8 @@ other components on the same UI thread from progressing.
 
 | Sample | What to study |
 | --- | --- |
-| [`create_window`](../../crates/samples/windows/samples) | Basic creation and `run_with`. |
-| [`window_message`](../../crates/samples/windows/samples) | Paint, mouse, and keyboard messages. |
+| [`window-message`](../../crates/samples/windows/window-message) | Creation and message handling. |
 | [`standalone`](../../crates/samples/canvas/standalone) | Swap-chain hosting and resize flow. |
-| [`direct2d`](../../crates/samples/windows/direct2d) | Rendering only while visible. |
-| [`direct3d12`](../../crates/samples/windows/direct3d12) | Binding a swap chain to the handle. |
-| [`dcomp`](../../crates/samples/windows/dcomp) | Composition, custom style, and DPI. |
-| [`webview`](../../crates/samples/webview/samples) | Controller lifetime and resize flow. |
 
 ---
 
@@ -132,11 +139,14 @@ This section is for contributors to `windows-window`.
 registration, creation, DPI setup, destruction, and message dispatch. The hand-written
 `window.rs` depends only on [`windows-core`](windows-core.md).
 
-One class is registered lazily for the process. A boxed state containing optional message and
-resize handlers is stored in `GWLP_USERDATA` after `CreateWindowExW`. `wndproc` removes the state
-on `WM_NCDESTROY`; `Window::drop` checks whether the handle is still live before destroying it.
+One class is registered lazily for the process. A boxed state containing optional message, resize,
+move, and close handlers and a shared liveness bit is stored in `GWLP_USERDATA` after
+`CreateWindowExW`. `wndproc` clears the bit and removes the state on `WM_NCDESTROY`. `Window::drop`
+destroys only the original native window while it remains live. This prevents a late drop from
+acting on an HWND
+value that Windows has recycled for another window.
 
-Before invoking a callback, `wndproc` takes both handlers out of state. After the callback it reads
+Before invoking a callback, `wndproc` takes all handlers out of state. After the callback it reads
 `GWLP_USERDATA` again because synchronous handling may have destroyed the window and freed the
 state. It restores the handlers only when the state still exists. Keep this ordering when changing
 dispatch behavior.

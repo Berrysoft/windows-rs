@@ -1,4 +1,4 @@
-use super::super::*;
+use super::*;
 
 #[derive(Clone, Copy, PartialEq)]
 struct TitleBarInput {
@@ -27,14 +27,13 @@ impl Component for TitleBarComponent {
         let title_bar = TitleBar::new()
             .title("Title")
             .preferred_height(input.height);
-        let title_bar = title_bar.slots(std::iter::empty::<SlotView<TitleBarSlot>>());
         if input.duplicate {
             return StackPanel::new().children((title_bar, TitleBar::new()));
         }
         if input.nested {
             Border::new().content(title_bar)
         } else {
-            title_bar
+            title_bar.into()
         }
     }
 }
@@ -68,6 +67,35 @@ fn direct_element_updates_reconcile_title_bar_declarations() {
 
     pump.update(TextBlock::new().into()).unwrap();
     assert_eq!(pump.runtime().window_title_bar(window), None);
+}
+
+#[test]
+fn title_bar_named_content_preserves_the_active_title_bar() {
+    let mut pump = Pump::new(RecordingRuntime::default());
+    pump.mount(TitleBar::new().into()).unwrap();
+    let window = pump.window.unwrap();
+    let (title_bar, _) = pump.runtime().window_title_bar(window).unwrap();
+
+    pump.update(
+        TitleBar::new()
+            .content(TextBlock::new().text("content"))
+            .into(),
+    )
+    .unwrap();
+    assert_eq!(
+        pump.runtime()
+            .window_title_bar(window)
+            .map(|(node, _)| node),
+        Some(title_bar)
+    );
+
+    pump.update(TitleBar::new().into()).unwrap();
+    assert_eq!(
+        pump.runtime()
+            .window_title_bar(window)
+            .map(|(node, _)| node),
+        Some(title_bar)
+    );
 }
 
 #[test]
@@ -201,4 +229,42 @@ fn failed_native_apply_does_not_publish_title_bar_height() {
         Some((published.title_bar, WindowTitleBarHeight::Standard))
     );
     assert_eq!(pump.tree.window_title_bar().unwrap(), published);
+}
+
+struct FramedComponent;
+
+impl Component for FramedComponent {
+    type Input = ();
+    type Message = ();
+
+    fn create(_input: &Self::Input, _context: &ComponentContext<Self>) -> Self {
+        Self
+    }
+
+    fn update(&mut self, _message: (), _context: &ComponentContext<Self>) {}
+
+    fn view(&self, _input: &Self::Input, context: &mut ViewContext<Self>) -> View {
+        context.window_visuals(WindowVisuals::new().backdrop(WindowBackdrop::Acrylic));
+        context.window_frame("Window title", TextBlock::new().text("content"))
+    }
+}
+
+#[test]
+fn window_frame_publishes_native_title_and_visuals() {
+    let mut pump = Pump::new(RecordingRuntime::default());
+    pump.mount_view(View::component::<FramedComponent>(()))
+        .unwrap();
+    let window = pump.window.unwrap();
+
+    assert_eq!(pump.runtime().window_title(window), Some("Window title"));
+    assert_eq!(
+        pump.runtime().window_visuals(window),
+        Some(WindowVisuals::new().backdrop(WindowBackdrop::Acrylic))
+    );
+    assert_eq!(
+        pump.runtime()
+            .window_title_bar(window)
+            .map(|(_, height)| height),
+        Some(WindowTitleBarHeight::Standard)
+    );
 }

@@ -36,12 +36,13 @@ impl Component for Counter {
     }
 
     fn view(&self, _input: &(), context: &mut ViewContext<Self>) -> View {
-        StackPanel::new().spacing(8.0).children((
+        let content = StackPanel::new().spacing(8.0).children((
             TextBlock::new().text(format!("Count: {}", self.count)),
             Button::new()
                 .on_click(context.forward())
                 .content("Increment"),
-        ))
+        ));
+        context.window_frame("Counter", content)
     }
 }
 
@@ -49,3 +50,9 @@ fn main() {
     App::run_component::<Counter>(()).unwrap();
 }
 ```
+
+Applications whose resources outlive any one window can use `App::run_with`.
+
+Use `ThemeTransition::Reposition` with `LayoutControl::transitions` to animate retained elements
+between layout-driven positions. The
+[`theme-transition`](../../samples/reactor/theme-transition) sample demonstrates the effect.

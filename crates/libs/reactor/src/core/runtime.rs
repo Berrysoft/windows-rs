@@ -93,6 +93,10 @@ pub trait NativeRuntime {
     fn apply(&mut self, commands: &[Command]) -> Result<(), NativeApplyError>;
     fn reset(&mut self);
 
+    fn window_handle(&self, _node: NodeId) -> Result<isize, RuntimeError> {
+        Err(RuntimeError::UnsupportedKind)
+    }
+
     fn open_windows(&mut self, _roots: Vec<View>) -> Result<(), RuntimeError> {
         Err(RuntimeError::UnsupportedKind)
     }
@@ -154,6 +158,8 @@ pub struct QueuedEvent {
     pub revision: u32,
     pub payload: EventPayload,
     invoke_callback: bool,
+    routed_message: Option<DeferredMessage>,
+    claimed_handled: bool,
 }
 
 impl QueuedEvent {
@@ -164,6 +170,8 @@ impl QueuedEvent {
             revision,
             payload,
             invoke_callback: true,
+            routed_message: None,
+            claimed_handled: false,
         }
     }
 
@@ -179,11 +187,40 @@ impl QueuedEvent {
             revision,
             payload,
             invoke_callback: false,
+            routed_message: None,
+            claimed_handled: false,
+        }
+    }
+
+    pub(crate) fn routed(
+        node: NodeId,
+        event: EventId,
+        revision: u32,
+        payload: EventPayload,
+        message: DeferredMessage,
+        claimed_handled: bool,
+    ) -> Self {
+        Self {
+            node,
+            event,
+            revision,
+            payload,
+            invoke_callback: false,
+            routed_message: Some(message),
+            claimed_handled,
         }
     }
 
     pub(crate) fn invokes_callback(&self) -> bool {
         self.invoke_callback
+    }
+
+    pub(crate) fn routed_message_mut(&mut self) -> Option<&mut DeferredMessage> {
+        self.routed_message.as_mut()
+    }
+
+    pub(crate) fn claimed_handled(&self) -> bool {
+        self.claimed_handled
     }
 }
 
@@ -233,6 +270,9 @@ pub enum Command {
         node: NodeId,
     },
     ActivateWindow {
+        node: NodeId,
+    },
+    RequestWindowActivation {
         node: NodeId,
     },
     CloseWindow {
@@ -311,7 +351,12 @@ pub enum Command {
     ObserveSwapChainPanel {
         node: NodeId,
         observation: u64,
+        binding: u64,
         callback: Callback<SwapChainPanelEvent>,
+    },
+    RequestSwapChainPanelFrame {
+        node: NodeId,
+        completion: Callback<Result<(), RuntimeError>>,
     },
     SetSwapChain {
         node: NodeId,
@@ -359,6 +404,11 @@ pub enum Command {
     UnsubscribeEvent {
         node: NodeId,
         event: EventId,
+    },
+    SetRoutedCallback {
+        node: NodeId,
+        event: EventId,
+        callback: Option<RoutedEventCallback>,
     },
     SetSlot {
         parent: NodeId,
@@ -434,6 +484,7 @@ impl Command {
             Self::SetSwapChain {
                 node, completion, ..
             }
+            | Self::RequestSwapChainPanelFrame { node, completion }
             | Self::SetNativeImageSource {
                 node, completion, ..
             }

@@ -8,7 +8,12 @@ pub(crate) enum FeedbackExpectation {
 }
 
 mod winui;
+pub(crate) use winui::{NativeGrid, NativeHorizontalAlignment, NativeVerticalAlignment};
 
 #[cfg(feature = "test")]
-pub use winui::test::{schedule_live_test_exit, subscribe_live_rendering};
+pub use winui::test::{
+    LiveInputProbe, LiveInputProbeStage, schedule_live_test_exit, subscribe_live_rendering,
+};
+#[cfg(feature = "test")]
+pub(crate) use winui::test::{finish_live_text_input_dispatch, subscribe_live_input_probe};
 pub use winui::*;

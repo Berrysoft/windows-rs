@@ -3,24 +3,39 @@ use std::time::Duration;
 use windows_reactor::test::{LiveProbe, take_live_diagnostics};
 use windows_reactor::*;
 
+#[cfg(feature = "self-contained")]
+use crate::fixtures::WebViewLifecycle;
 use crate::fixtures::{
     CompositionLifecycle, EncodedImageLifecycle, FixtureInput, FixtureResult, FocusPublication,
-    ImageSourceLifecycle, KeyedNativeMutations, PointerInjection, ProbeFixture, ProbeInput,
-    SwapChainLifecycle, ThemeResources, TimerLifecycle, WindowLifecycle,
+    ImageSourceLifecycle, KeyboardInput, KeyedNativeMutations, NestedWindowOperation,
+    PointerInjection, ProbeFixture, ProbeInput, SwapChainLifecycle, ThemeResources, TimerLifecycle,
+    WindowLifecycle,
 };
 
 const FIXTURE_TIMEOUT: Duration = Duration::from_secs(15);
-pub(crate) const SUITE_TIMEOUT: Duration =
-    Duration::from_secs(FIXTURE_TIMEOUT.as_secs() * FIXTURES.len() as u64 + 10);
+const WEBVIEW_FIXTURE_TIMEOUT: Duration = Duration::from_secs(45);
+pub(crate) const SUITE_TIMEOUT: Duration = Duration::from_secs(
+    FIXTURE_TIMEOUT.as_secs() * FIXTURES.len() as u64
+        + if cfg!(feature = "self-contained") {
+            WEBVIEW_FIXTURE_TIMEOUT.as_secs() - FIXTURE_TIMEOUT.as_secs()
+        } else {
+            0
+        }
+        + 10,
+);
 
 #[derive(Clone, Copy)]
 enum FixtureKind {
     ContentDialogLifecycle,
     FocusPublication,
+    KeyboardInput,
     EventDelivery,
     EventRevokers,
     ControlledFeedback,
+    NestedWindowOperation,
     WindowLifecycle,
+    #[cfg(feature = "self-contained")]
+    WebViewLifecycle,
     EncodedImageLifecycle,
     ImageSourceLifecycle,
     CompositionLifecycle,
@@ -36,10 +51,24 @@ struct Fixture {
     kind: FixtureKind,
 }
 
+impl Fixture {
+    fn timeout(&self) -> Duration {
+        match self.kind {
+            #[cfg(feature = "self-contained")]
+            FixtureKind::WebViewLifecycle => WEBVIEW_FIXTURE_TIMEOUT,
+            _ => FIXTURE_TIMEOUT,
+        }
+    }
+}
+
 const FIXTURES: &[Fixture] = &[
     Fixture {
         name: "Focus_PublicationAndRetirement",
         kind: FixtureKind::FocusPublication,
+    },
+    Fixture {
+        name: "Keyboard_RoutedInput",
+        kind: FixtureKind::KeyboardInput,
     },
     Fixture {
         name: "ContentDialog_QueuedReopenLifecycle",
@@ -58,8 +87,17 @@ const FIXTURES: &[Fixture] = &[
         kind: FixtureKind::ControlledFeedback,
     },
     Fixture {
+        name: "Window_NestedOperationRearming",
+        kind: FixtureKind::NestedWindowOperation,
+    },
+    Fixture {
         name: "Window_ClosureTaskAndEffectCleanup",
         kind: FixtureKind::WindowLifecycle,
+    },
+    #[cfg(feature = "self-contained")]
+    Fixture {
+        name: "WebView_InitializeBridgeAndScript",
+        kind: FixtureKind::WebViewLifecycle,
     },
     Fixture {
         name: "ImageSource_DpiAttachClearRetire",
@@ -95,9 +133,56 @@ const FIXTURES: &[Fixture] = &[
     },
 ];
 
+pub(crate) fn select_fixtures(filter: Option<&str>) -> Result<Vec<usize>, String> {
+    let selected = FIXTURES
+        .iter()
+        .enumerate()
+        .filter_map(|(index, fixture)| {
+            filter
+                .is_none_or(|filter| fixture.name.contains(filter))
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        Err(format!("no fixture matched {filter:?}"))
+    } else {
+        Ok(selected)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct RunnerInput {
+    app: Option<AppContext>,
+    selected: Vec<usize>,
+}
+
+impl RunnerInput {
+    pub(crate) fn legacy(selected: Vec<usize>) -> Self {
+        Self {
+            app: None,
+            selected,
+        }
+    }
+
+    pub(crate) fn explicit(selected: Vec<usize>, app: AppContext) -> Self {
+        Self {
+            app: Some(app),
+            selected,
+        }
+    }
+}
+
+impl PartialEq for RunnerInput {
+    fn eq(&self, other: &Self) -> bool {
+        self.selected == other.selected && self.app.is_some() == other.app.is_some()
+    }
+}
+
 pub(crate) struct FixtureRunner {
+    app: Option<AppContext>,
     current: usize,
     generation: u64,
+    selected: Vec<usize>,
     timeout: Option<ComponentTask>,
 }
 
@@ -110,10 +195,15 @@ pub(crate) enum Message {
 }
 
 impl FixtureRunner {
+    fn fixture(&self) -> &'static Fixture {
+        &FIXTURES[self.selected[self.current]]
+    }
+
     fn start_timeout(&mut self, context: &ComponentContext<Self>) {
         let generation = self.generation;
+        let timeout = self.fixture().timeout();
         self.timeout = Some(context.spawn_background(move |cancellation| {
-            std::thread::sleep(FIXTURE_TIMEOUT);
+            std::thread::sleep(timeout);
             if cancellation.is_cancelled() {
                 Message::Timeout(u64::MAX)
             } else {
@@ -123,17 +213,13 @@ impl FixtureRunner {
     }
 
     fn fail(&self, detail: &str) -> ! {
-        eprintln!(
-            "not ok {} - {}",
-            self.current + 1,
-            FIXTURES[self.current].name
-        );
+        eprintln!("not ok {} - {}", self.current + 1, self.fixture().name);
         eprintln!("# {detail}");
         std::process::exit(1);
     }
 
     fn open_probe(&self, context: &ComponentContext<Self>) {
-        let probe = match FIXTURES[self.current].kind {
+        let probe = match self.fixture().kind {
             FixtureKind::ContentDialogLifecycle => LiveProbe::ContentDialogLifecycle,
             FixtureKind::EventDelivery => LiveProbe::EventDelivery,
             FixtureKind::EventRevokers => LiveProbe::EventRevokers,
@@ -154,16 +240,19 @@ impl FixtureRunner {
 }
 
 impl Component for FixtureRunner {
-    type Input = ();
+    type Input = RunnerInput;
     type Message = Message;
 
-    fn create(_input: &Self::Input, context: &ComponentContext<Self>) -> Self {
+    fn create(input: &Self::Input, context: &ComponentContext<Self>) -> Self {
         let mut runner = Self {
+            app: input.app.clone(),
             current: 0,
             generation: 0,
+            selected: input.selected.clone(),
             timeout: None,
         };
         runner.start_timeout(context);
+        runner.open_probe(context);
         runner
     }
 
@@ -180,12 +269,16 @@ impl Component for FixtureRunner {
                 if !diagnostics.is_empty() {
                     self.fail(&format!("unexpected diagnostics: {diagnostics:?}"));
                 }
-                println!("ok {} - {}", self.current + 1, FIXTURES[self.current].name);
+                println!("ok {} - {}", self.current + 1, self.fixture().name);
                 self.current += 1;
                 self.generation += 1;
-                if self.current == FIXTURES.len() {
-                    println!("1..{}", FIXTURES.len());
-                    if !context.window().request_close() {
+                if self.current == self.selected.len() {
+                    println!("1..{}", self.selected.len());
+                    if let Some(app) = self.app.as_ref() {
+                        if let Err(error) = app.exit() {
+                            self.fail(&format!("explicit application exit failed: {error}"));
+                        }
+                    } else if !context.window().request_close() {
                         self.fail("fixture runner could not close its window");
                     }
                 } else {
@@ -206,11 +299,16 @@ impl Component for FixtureRunner {
         let input = FixtureInput {
             complete: context.callback(move |result| Message::Complete { generation, result }),
         };
-        match FIXTURES.get(self.current).map(|fixture| fixture.kind) {
+        match self
+            .selected
+            .get(self.current)
+            .map(|index| FIXTURES[*index].kind)
+        {
             Some(FixtureKind::ContentDialogLifecycle) => TextBlock::new()
                 .text("ContentDialog lifecycle probe")
                 .into(),
             Some(FixtureKind::FocusPublication) => View::component::<FocusPublication>(input),
+            Some(FixtureKind::KeyboardInput) => View::component::<KeyboardInput>(input),
             Some(FixtureKind::EventDelivery) => {
                 TextBlock::new().text("event delivery probe").into()
             }
@@ -218,7 +316,12 @@ impl Component for FixtureRunner {
             Some(FixtureKind::ControlledFeedback) => {
                 TextBlock::new().text("controlled probe").into()
             }
+            Some(FixtureKind::NestedWindowOperation) => {
+                View::component::<NestedWindowOperation>(input)
+            }
             Some(FixtureKind::WindowLifecycle) => View::component::<WindowLifecycle>(input),
+            #[cfg(feature = "self-contained")]
+            Some(FixtureKind::WebViewLifecycle) => View::component::<WebViewLifecycle>(input),
             Some(FixtureKind::ImageSourceLifecycle) => {
                 View::component::<ImageSourceLifecycle>(input)
             }

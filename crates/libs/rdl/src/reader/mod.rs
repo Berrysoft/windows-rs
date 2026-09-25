@@ -687,6 +687,13 @@ impl Encoder<'_> {
         }
 
         let value = match ty {
+            metadata::Type::Bool => match value {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Bool(value),
+                    ..
+                }) => metadata::Value::Bool(value.value),
+                _ => return self.err(value, "value not valid"),
+            },
             metadata::Type::I8 => metadata::Value::I8(self.encode_lit_sint(value, 8)? as i8),
             metadata::Type::U8 => metadata::Value::U8(self.encode_lit_uint(value, 8)? as u8),
             metadata::Type::I16 => metadata::Value::I16(self.encode_lit_sint(value, 16)? as i16),
@@ -709,6 +716,10 @@ impl Encoder<'_> {
                 }
             }
             metadata::Type::ValueName(tn) | metadata::Type::ClassName(tn) => {
+                if tn == ("Windows.Foundation", "HResult") {
+                    return self.encode_value(&metadata::Type::I32, value);
+                }
+
                 let underlying = self
                     .output
                     .reference()

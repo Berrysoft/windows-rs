@@ -8,6 +8,7 @@ pub(super) struct LiveTestState {
     pub(super) event_delivery_waits: usize,
     pub(super) content_dialog_stage: usize,
     pub(super) content_dialog_waits: usize,
+    pub(super) controlled_feedback_events: Option<Rc<RefCell<Vec<String>>>>,
 }
 
 thread_local! {
@@ -60,6 +61,31 @@ pub fn clear_live_performance_times() {
 
 pub fn take_live_diagnostics() -> Vec<String> {
     DIAGNOSTICS.with(|diagnostics| diagnostics.take())
+}
+
+pub fn invoke_live_application_menu_item() -> windows_core::Result<()> {
+    let item = HOST.with(|host| {
+        let host = host.borrow();
+        let menu = host
+            .as_ref()
+            .and_then(|host| host.transient_menu.as_ref())
+            .ok_or_else(|| {
+                windows_core::Error::new(E_FAIL, "live application menu is unavailable")
+            })?;
+        menu.item_for_test()
+    })?;
+    MenuFlyoutItemAutomationPeer::CreateInstanceWithOwner(&item)?
+        .cast::<IInvokeProvider>()?
+        .Invoke()
+}
+
+pub fn live_application_menu_is_open() -> bool {
+    HOST.with(|host| {
+        host.borrow()
+            .as_ref()
+            .and_then(|host| host.transient_menu.as_ref())
+            .is_some_and(|menu| menu.is_open_for_test())
+    })
 }
 
 pub fn schedule_live_event_subscription_count(
@@ -115,6 +141,38 @@ pub fn schedule_live_window_handle(
         Err(windows_core::Error::new(
             E_FAIL,
             "dispatcher rejected live window handle request",
+        ))
+    }
+}
+
+pub fn schedule_live_input_probe(
+    callback: impl Fn(LiveInputProbeStage) + 'static,
+    completion: impl FnOnce(Result<LiveInputProbe, String>) + 'static,
+) -> windows_core::Result<()> {
+    let dispatcher = DispatcherQueue::GetForCurrentThread()?;
+    let callback = RefCell::new(Some(callback));
+    let completion = RefCell::new(Some(completion));
+    let handler = DispatcherQueueHandler::new(move || {
+        let result = HOST.with(|host| {
+            let window = host
+                .borrow()
+                .as_ref()
+                .and_then(LiveHost::primary)
+                .and_then(|live| live.live_window().ok())
+                .ok_or_else(|| "live primary window is unavailable".to_string())?;
+            subscribe_live_input_probe(&window, callback.take().unwrap())
+                .map_err(|error| error.to_string())
+        });
+        if let Some(completion) = completion.take() {
+            completion(result);
+        }
+    });
+    if dispatcher.TryEnqueueWithPriority(DispatcherQueuePriority::Low, &handler)? {
+        Ok(())
+    } else {
+        Err(windows_core::Error::new(
+            E_FAIL,
+            "dispatcher rejected live input probe request",
         ))
     }
 }
@@ -190,20 +248,43 @@ pub fn schedule_live_probe(
                 return;
             }
             let verify_completion = Rc::clone(&input_completion);
+            let native_dispatcher = input_dispatcher.clone();
             let verify = move || {
-                let passed = HOST.with(|host| {
+                let applied = HOST.with(|host| {
                     host.borrow_mut()
                         .as_mut()
                         .and_then(LiveHost::secondary_mut)
                         .is_some_and(LivePump::live_controlled_feedback_finish)
                 });
-                finish_live_probe(
-                    probe,
-                    passed
-                        .then_some(())
-                        .ok_or_else(|| format!("{probe:?} probe failed")),
-                    Rc::clone(&verify_completion),
-                );
+                if !applied {
+                    finish_live_probe(
+                        probe,
+                        Err(format!("{probe:?} native RichEdit input failed")),
+                        Rc::clone(&verify_completion),
+                    );
+                    return;
+                }
+                let native_completion = Rc::clone(&verify_completion);
+                let verify_native = move || {
+                    let passed = HOST.with(|host| {
+                        host.borrow_mut()
+                            .as_mut()
+                            .and_then(LiveHost::secondary_mut)
+                            .is_some_and(LivePump::live_controlled_feedback_native_finish)
+                    });
+                    finish_live_probe(
+                        probe,
+                        passed
+                            .then_some(())
+                            .ok_or_else(|| format!("{probe:?} probe failed")),
+                        Rc::clone(&native_completion),
+                    );
+                };
+                if let Err(error) = queue_live_delayed(native_dispatcher.clone(), verify_native) {
+                    verify_completion(Err(format!(
+                        "{probe:?} native RichEdit verification failed: {error}"
+                    )));
+                }
             };
             if let Err(error) = queue_live_delayed(input_dispatcher.clone(), verify) {
                 input_completion(Err(format!("{probe:?} verification failed: {error}")));

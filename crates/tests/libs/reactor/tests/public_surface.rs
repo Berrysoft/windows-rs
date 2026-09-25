@@ -1,4 +1,12 @@
+use windows_core::{Error, HRESULT};
 use windows_reactor::*;
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+const PIXEL_GRID_LENGTH: GridLength = GridLength::Pixel(120.0);
+static STAR_GRID_LENGTH: GridLength = GridLength::Star(2.0);
 
 #[test]
 fn generated_builders_convert_to_views() {
@@ -20,7 +28,12 @@ fn generated_builders_convert_to_views() {
     let slider = Slider::new().value(Some(10.0));
     let toggle = ToggleSwitch::new().is_on(None);
     let grid = Grid::new()
-        .rows_optional(Some([GridLength::Auto, GridLength::STAR]))
+        .rows_optional(Some([
+            GridLength::Auto,
+            PIXEL_GRID_LENGTH,
+            STAR_GRID_LENGTH,
+            GridLength::STAR.min(80.0).max(240.0),
+        ]))
         .columns_optional(None::<[GridLength; 0]>);
     let border = Border::new()
         .padding(Thickness::uniform(24.0))
@@ -52,36 +65,19 @@ fn generated_structural_capabilities_compose_views() {
         .item("first", TextBlock::new().text("one"))
         .items([(2_u64, View::component::<TestComponent>("two".to_string()))]);
     let _: View = ScrollViewer::new().content(repeater);
-    let _: View = NavigationView::new().slots([
-        SlotView::new(NavigationViewSlot::Content, TextBlock::new()),
-        SlotView::new(NavigationViewSlot::Header, Button::new()),
-    ]);
-    let _: View = NavigationView::new().collection_slot(
-        NavigationViewSlot::MenuItems,
-        [
-            (
-                "first",
-                NavigationViewItem::new().slot(NavigationViewItemSlot::Content, "one"),
-            ),
-            (
-                "second",
-                NavigationViewItem::new().slot(NavigationViewItemSlot::Content, "two"),
-            ),
-        ],
-    );
-    let _: SlotView<NavigationViewSlot> = SlotView::collection(
-        NavigationViewSlot::MenuItems,
-        [
-            (
-                "first",
-                NavigationViewItem::new().slot(NavigationViewItemSlot::Content, "one"),
-            ),
-            (
-                "second",
-                NavigationViewItem::new().slot(NavigationViewItemSlot::Content, "two"),
-            ),
-        ],
-    );
+    let _: View = NavigationView::new()
+        .content(TextBlock::new())
+        .header(Button::new())
+        .into();
+    let _: View = NavigationView::new()
+        .menu_items([
+            ("first", NavigationViewItem::new().content("one")),
+            ("second", NavigationViewItem::new().content("two")),
+        ])
+        .into();
+    let _: View = NavigationView::new()
+        .footer_menu_items([("settings", NavigationViewItem::new().content("Settings"))])
+        .into();
     let _: View = View::keyed_fragment([
         ("first", TextBlock::new().text("one")),
         ("second", TextBlock::new().text("two")),
@@ -89,8 +85,8 @@ fn generated_structural_capabilities_compose_views() {
     let _: KeyedView = ("key", TextBlock::new().text("value")).into();
     let _: View = TitleBar::new()
         .preferred_height(WindowTitleBarHeight::Tall)
-        .slots(std::iter::empty::<SlotView<TitleBarSlot>>());
-    let _: View = TitleBar::new().slots(std::iter::empty::<SlotView<TitleBarSlot>>());
+        .into();
+    let _: View = TitleBar::new().into();
 }
 
 struct TestComponent;
@@ -153,4 +149,448 @@ impl Component for WindowVisualComponent {
 #[test]
 fn window_visual_environment_is_public() {
     let _: View = View::component::<WindowVisualComponent>(());
+}
+
+#[derive(Clone)]
+struct ClosingWindowInput {
+    dropped: Arc<AtomicBool>,
+}
+
+impl PartialEq for ClosingWindowInput {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.dropped, &other.dropped)
+    }
+}
+
+struct ClosingWindow {
+    _close: ComponentTask,
+    dropped: Arc<AtomicBool>,
+}
+
+impl Component for ClosingWindow {
+    type Input = ClosingWindowInput;
+    type Message = ();
+
+    fn create(input: &Self::Input, context: &ComponentContext<Self>) -> Self {
+        Self {
+            _close: context.spawn_background(|_| {
+                std::thread::sleep(Duration::from_millis(100));
+            }),
+            dropped: Arc::clone(&input.dropped),
+        }
+    }
+
+    fn update(&mut self, _message: (), context: &ComponentContext<Self>) {
+        assert!(context.window().request_close());
+    }
+
+    fn view(&self, _input: &Self::Input, context: &mut ViewContext<Self>) -> View {
+        context.window_frame("Application lifetime test", "Closing...")
+    }
+}
+
+impl Drop for ClosingWindow {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::Release);
+    }
+}
+
+#[derive(Clone)]
+struct HoldingWindowInput(Arc<AtomicBool>, Arc<AtomicBool>);
+
+impl PartialEq for HoldingWindowInput {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) && Arc::ptr_eq(&self.1, &other.1)
+    }
+}
+
+struct HoldingWindow {
+    dropped: Arc<AtomicBool>,
+}
+
+impl Component for HoldingWindow {
+    type Input = HoldingWindowInput;
+    type Message = ();
+
+    fn create(input: &Self::Input, _context: &ComponentContext<Self>) -> Self {
+        input.0.store(true, Ordering::Release);
+        Self {
+            dropped: Arc::clone(&input.1),
+        }
+    }
+
+    fn update(&mut self, _message: (), _context: &ComponentContext<Self>) {}
+
+    fn view(&self, _input: &Self::Input, context: &mut ViewContext<Self>) -> View {
+        context.window_frame("Application exit test", "Waiting for explicit exit...")
+    }
+}
+
+impl Drop for HoldingWindow {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::Release);
+    }
+}
+
+#[derive(Clone)]
+struct ReplacementWindowInput(Arc<AtomicBool>);
+
+impl PartialEq for ReplacementWindowInput {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+struct ReplacementWindow {
+    _close: ComponentTask,
+}
+
+impl Component for ReplacementWindow {
+    type Input = ReplacementWindowInput;
+    type Message = ();
+
+    fn create(input: &Self::Input, context: &ComponentContext<Self>) -> Self {
+        input.0.store(true, Ordering::Release);
+        Self {
+            _close: context.spawn_background(|_| {
+                std::thread::sleep(Duration::from_millis(100));
+            }),
+        }
+    }
+
+    fn update(&mut self, _message: (), context: &ComponentContext<Self>) {
+        assert!(context.window().request_close());
+    }
+
+    fn view(&self, _input: &Self::Input, context: &mut ViewContext<Self>) -> View {
+        context.window_frame("Replacement window", "Mounted")
+    }
+}
+
+struct ReplacingWindow {
+    mounted: Arc<AtomicBool>,
+    _replace: ComponentTask,
+}
+
+impl Component for ReplacingWindow {
+    type Input = ReplacementWindowInput;
+    type Message = ();
+
+    fn create(input: &Self::Input, context: &ComponentContext<Self>) -> Self {
+        Self {
+            mounted: Arc::clone(&input.0),
+            _replace: context.spawn_background(|_| {
+                std::thread::sleep(Duration::from_millis(100));
+            }),
+        }
+    }
+
+    fn update(&mut self, _message: (), context: &ComponentContext<Self>) {
+        assert!(context.open_window(View::component::<ReplacementWindow>(
+            ReplacementWindowInput(Arc::clone(&self.mounted)),
+        )));
+        assert!(context.window().request_close());
+    }
+
+    fn view(&self, _input: &ReplacementWindowInput, context: &mut ViewContext<Self>) -> View {
+        context.window_frame("Replacing window", "Opening replacement...")
+    }
+}
+
+#[derive(Clone)]
+struct TimedClosingWindowInput {
+    closed: Arc<AtomicBool>,
+    delay: Duration,
+}
+
+impl PartialEq for TimedClosingWindowInput {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.closed, &other.closed) && self.delay == other.delay
+    }
+}
+
+struct TimedClosingWindow {
+    closed: Arc<AtomicBool>,
+    _close: ComponentTask,
+}
+
+impl Component for TimedClosingWindow {
+    type Input = TimedClosingWindowInput;
+    type Message = ();
+
+    fn create(input: &Self::Input, context: &ComponentContext<Self>) -> Self {
+        let delay = input.delay;
+        Self {
+            closed: Arc::clone(&input.closed),
+            _close: context.spawn_background(move |_| std::thread::sleep(delay)),
+        }
+    }
+
+    fn update(&mut self, _message: (), context: &ComponentContext<Self>) {
+        self.closed.store(true, Ordering::Release);
+        assert!(context.window().request_close());
+    }
+
+    fn view(&self, _input: &Self::Input, context: &mut ViewContext<Self>) -> View {
+        context.window_frame("Timed window", "Waiting to close...")
+    }
+}
+
+struct AppResource {
+    dropped: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for AppResource {
+    fn drop(&mut self) {
+        self.worker.take().unwrap().join().unwrap();
+        self.dropped.store(true, Ordering::Release);
+    }
+}
+
+#[test]
+#[ignore = "runs the interactive WinUI application loop"]
+fn last_window_can_be_replaced_in_one_publication() {
+    let mounted = Arc::new(AtomicBool::new(false));
+    App::run_component::<ReplacingWindow>(ReplacementWindowInput(Arc::clone(&mounted))).unwrap();
+    assert!(mounted.load(Ordering::Acquire));
+}
+
+#[test]
+#[ignore = "runs the interactive WinUI application loop"]
+fn multiple_windows_exit_after_all_have_closed() {
+    let first_closed = Arc::new(AtomicBool::new(false));
+    let second_closed = Arc::new(AtomicBool::new(false));
+    App::run_windows([
+        View::component::<TimedClosingWindow>(TimedClosingWindowInput {
+            closed: Arc::clone(&first_closed),
+            delay: Duration::from_millis(100),
+        }),
+        View::component::<TimedClosingWindow>(TimedClosingWindowInput {
+            closed: Arc::clone(&second_closed),
+            delay: Duration::from_millis(300),
+        }),
+    ])
+    .unwrap();
+    assert!(first_closed.load(Ordering::Acquire));
+    assert!(second_closed.load(Ordering::Acquire));
+}
+
+#[test]
+#[ignore = "runs the interactive WinUI application loop"]
+fn application_lifetime_is_independent_of_windows() {
+    let completed = Arc::new(AtomicBool::new(false));
+    let watchdog_completed = Arc::clone(&completed);
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(20));
+        if !watchdog_completed.load(Ordering::Acquire) {
+            eprintln!("Reactor application lifetime test timed out");
+            std::process::exit(1);
+        }
+    });
+
+    let opened = Arc::new(AtomicBool::new(false));
+    let window_dropped = Arc::new(AtomicBool::new(false));
+    let active_window = Arc::new(AtomicBool::new(false));
+    let active_window_dropped = Arc::new(AtomicBool::new(false));
+    let explicit_exit = Arc::new(AtomicBool::new(false));
+    let resource_dropped = Arc::new(AtomicBool::new(false));
+
+    App::run_with({
+        let opened = Arc::clone(&opened);
+        let window_dropped = Arc::clone(&window_dropped);
+        let active_window = Arc::clone(&active_window);
+        let active_window_dropped = Arc::clone(&active_window_dropped);
+        let explicit_exit = Arc::clone(&explicit_exit);
+        let resource_dropped = Arc::clone(&resource_dropped);
+        move |app| {
+            let proxy = app.proxy();
+            let worker = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(50));
+                let opened_window = Arc::clone(&opened);
+                let dropped = Arc::clone(&window_dropped);
+                proxy
+                    .dispatch(move |app| {
+                        app.open_window(View::component::<ClosingWindow>(ClosingWindowInput {
+                            dropped,
+                        }))
+                        .unwrap();
+                        opened_window.store(true, Ordering::Release);
+                    })
+                    .unwrap();
+
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while Instant::now() < deadline && !window_dropped.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                std::thread::sleep(Duration::from_millis(500));
+
+                let mounted = Arc::clone(&active_window);
+                let dropped = Arc::clone(&active_window_dropped);
+                proxy
+                    .dispatch(move |app| {
+                        app.open_window(View::component::<HoldingWindow>(HoldingWindowInput(
+                            mounted, dropped,
+                        )))
+                        .unwrap();
+                    })
+                    .unwrap();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while Instant::now() < deadline && !active_window.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+
+                proxy
+                    .dispatch(move |app| {
+                        explicit_exit.store(true, Ordering::Release);
+                        app.exit().unwrap();
+                    })
+                    .unwrap();
+            });
+            Ok(AppResource {
+                dropped: resource_dropped,
+                worker: Some(worker),
+            })
+        }
+    })
+    .unwrap();
+
+    assert!(opened.load(Ordering::Acquire));
+    assert!(window_dropped.load(Ordering::Acquire));
+    assert!(active_window.load(Ordering::Acquire));
+    assert!(active_window_dropped.load(Ordering::Acquire));
+    assert!(explicit_exit.load(Ordering::Acquire));
+    assert!(resource_dropped.load(Ordering::Acquire));
+    completed.store(true, Ordering::Release);
+}
+
+fn wait_for_application_menu(proxy: &AppProxy, open: bool) -> bool {
+    let observed = Arc::new(AtomicBool::new(!open));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && observed.load(Ordering::Acquire) != open {
+        let observed = Arc::clone(&observed);
+        proxy
+            .dispatch(move |_| {
+                observed.store(test::live_application_menu_is_open(), Ordering::Release);
+            })
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    observed.load(Ordering::Acquire) == open
+}
+
+#[test]
+#[ignore = "runs the interactive WinUI application loop"]
+fn application_menu_does_not_require_a_reactor_window() {
+    let invoked = Arc::new(AtomicBool::new(false));
+    let reopened = Arc::new(AtomicBool::new(false));
+    App::run_with({
+        let invoked = Arc::clone(&invoked);
+        let reopened = Arc::clone(&reopened);
+        move |app| {
+            let selected = Arc::clone(&invoked);
+            app.show_menu_at(
+                ScreenPoint::new(200, 200),
+                Menu::new([MenuItem::item("close", "Close")], move |_: String| {
+                    selected.store(true, Ordering::Release);
+                }),
+            )?;
+            assert!(
+                app.show_menu_at(
+                    ScreenPoint::new(200, 200),
+                    Menu::new([MenuItem::item("second", "Second")], |_: String| {}),
+                )
+                .is_err()
+            );
+            let proxy = app.proxy();
+            Ok(std::thread::spawn(move || {
+                if !wait_for_application_menu(&proxy, true) {
+                    proxy.exit().unwrap();
+                    return;
+                }
+
+                proxy
+                    .dispatch(|_| {
+                        if let Err(error) = test::invoke_live_application_menu_item() {
+                            eprintln!("could not invoke live application menu item: {error}");
+                        }
+                    })
+                    .unwrap();
+
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while Instant::now() < deadline && !invoked.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                if !invoked.load(Ordering::Acquire) {
+                    proxy.exit().unwrap();
+                    return;
+                }
+
+                if !wait_for_application_menu(&proxy, false) {
+                    proxy.exit().unwrap();
+                    return;
+                }
+
+                let reopened_result = Arc::clone(&reopened);
+                proxy
+                    .dispatch(move |app| {
+                        if app
+                            .show_menu_at(
+                                ScreenPoint::new(200, 200),
+                                Menu::new([MenuItem::item("second", "Second")], |_: String| {}),
+                            )
+                            .is_ok()
+                        {
+                            reopened_result.store(true, Ordering::Release);
+                        }
+                    })
+                    .unwrap();
+
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while Instant::now() < deadline && !reopened.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                proxy.exit().unwrap();
+            }))
+        }
+    })
+    .unwrap();
+    assert!(invoked.load(Ordering::Acquire));
+    assert!(reopened.load(Ordering::Acquire));
+}
+
+#[test]
+#[ignore = "runs the interactive WinUI application loop"]
+fn application_startup_error_is_returned() {
+    let expected = HRESULT(0x8000_4005_u32 as i32);
+    let error =
+        App::run_with(move |_| Err::<(), _>(Error::new(expected, "startup failed"))).unwrap_err();
+    assert_eq!(error.code(), expected);
+}
+
+#[test]
+#[ignore = "runs the interactive WinUI application loop"]
+fn excessive_startup_windows_are_rejected() {
+    assert!(
+        App::run_with(|app| {
+            app.open_windows(
+                (0..100).map(|index| TextBlock::new().text(format!("Window {index}")).into()),
+            )
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn app_proxy_is_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<AppProxy>();
+}
+
+#[test]
+fn application_menu_uses_screen_coordinates() {
+    let point = ScreenPoint::new(-10, 20);
+    assert_eq!(point, ScreenPoint { x: -10, y: 20 });
+    let _: fn(&AppContext, ScreenPoint, Menu) -> windows_core::Result<()> =
+        AppContext::show_menu_at;
 }

@@ -5,12 +5,12 @@ mod helpers;
 mod metadata;
 mod schema;
 
+use ::helpers::nuget_package;
 use metadata::MetadataResolver;
 use schema::workspace_path;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use windows_clang::nuget_package;
 
 const OUTPUT: &str = "crates/libs/reactor/src/generated.rs";
 const BINDINGS: &str = "crates/libs/reactor/src/native/winui/bindings.rs";
@@ -24,7 +24,7 @@ const WINMD: &str = "crates/tools/reactor/winmd";
 const EXTRAS_RDL: &str = "crates/tools/reactor/src/extras.rdl";
 const EXTRAS_WINMD: &str = "crates/tools/reactor/winmd/extras.winmd";
 const SCHEMA: &str = "crates/tools/reactor/src/winui.toml";
-const WINDOWS_APP_SDK_VERSION: &str = "2.4.0";
+const WINDOWS_APP_SDK_VERSION: &str = "2.5.1";
 
 fn main() {
     assert_reactor_setup_pins();

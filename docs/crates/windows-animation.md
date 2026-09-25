@@ -130,16 +130,14 @@ Reactor. The two animation object models are not interchangeable.
 
 ## Samples
 
-Run the headless examples with:
+Run the headless sample with:
 
 ```text
-cargo run -p animation_samples --example variable
-cargo run -p animation_samples --example storyboard
+cargo run -p animation-storyboard
 ```
 
-`variable` schedules one accelerate/decelerate transition and prints deterministic samples from
-0.0 through 1.0 seconds. `storyboard` chains a rise and fall through a keyframe. Both initialize
-COM explicitly and show the absolute-time update pattern.
+The sample schedules one transition directly and chains two more through a storyboard keyframe. It
+initializes COM explicitly and prints deterministic values using the absolute-time update pattern.
 
 The [`canvas/clock`](../../crates/samples/canvas/clock) sample applies the same API in a live
 per-frame rendering loop.
@@ -155,7 +153,8 @@ This section is for contributors to `windows-animation`.
 `Storyboard`, `Transition`, `Keyframe`, and `Variable` wrappers expose the selected Windows
 Animation Manager 2 interfaces.
 
-`Manager::new` and `TransitionLibrary::new` create their COM classes with `CoCreateInstance`.
+`Manager::new` and `TransitionLibrary::new` create their COM classes with
+`windows_core::create_instance`.
 Manager methods delegate scheduling and updates to `IUIAnimationManager2`. Storyboards add an
 explicit keyframe after each transition so the returned opaque `Keyframe` can anchor another
 transition. `Variable::copy_curve` casts the supplied interface to `IDCompositionAnimation` before

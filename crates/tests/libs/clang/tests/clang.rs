@@ -1,180 +1,53 @@
-#![cfg(target_pointer_width = "64")]
-
-include!(concat!(env!("OUT_DIR"), "/generated_tests.rs"));
-
-#[test]
-fn reference_rejects_non_winmd_input() {
-    let error = windows_clang::clang()
-        .reference("reference.rdl")
-        .output("unused.rdl")
-        .write()
-        .unwrap_err();
-    assert_eq!(error.message, "expected .winmd file");
-}
-
-#[test]
-fn terminals_require_output() {
-    let write = windows_clang::clang().write().unwrap_err();
-    assert_eq!(write.message, "output is required");
-
-    let partition = windows_clang::clang().write_by_header().unwrap_err();
-    assert_eq!(partition.message, "output is required");
-}
-
-#[test]
-fn malformed_metadata_reports_its_role() {
-    let reference = windows_clang::clang()
-        .reference_bytes(b"not metadata")
-        .output("unused.rdl")
-        .write()
-        .unwrap_err();
-    assert_eq!(reference.message, "invalid reference");
-    assert_eq!(reference.file_name, "<memory>");
-
-    let resolution = windows_clang::clang()
-        .resolution_bytes(b"not metadata")
-        .output("unused")
-        .write_by_header()
-        .unwrap_err();
-    assert_eq!(resolution.message, "invalid resolution input");
-    assert_eq!(resolution.file_name, "<memory>");
-}
+include!(concat!(env!("OUT_DIR"), "/tests.rs"));
 
 fn run(name: &str) {
-    let input_path = format!("input/{name}.h");
-    let expected_path = format!("expected/{name}.rdl");
-    let scratch = format!("{}/{name}", env!("OUT_DIR"));
-    std::fs::create_dir_all(&scratch).unwrap();
-
-    // Extract directives from `//!` comment lines at the top of the .h file.
-    // Supported directives:
-    //   //! namespace <Name>       - sets the RDL namespace (default: "Test")
-    //   //! library <name.dll>     - sets the library name
-    //   //! map <symbol>=<dll>      - overrides the DLL for one symbol (may repeat)
-    //   //! filter <suffix>        - adds a filter (may repeat)
-    //   //! args <arg> ...         - extra clang args
-    //   //! include <path>         - adds an include directory (-I)
-    //   //! reference <file>       - compiles `input/<file>.rdl` to a winmd and
-    //                               feeds it as a reference (cross-namespace
-    //                               resolution; the target namespace is excluded)
-    //   //! flat                    - use the source-based per-header (flat) scrape
-    //                               (`write_by_header`, as `tool-win32`) instead of
-    //                               the namespaced scrape (`write`, as `tool-webview`).
-    //                               Enables the flat-mode collapses/normalizations
-    //                               (`header_root.is_some()`); references/filters/library
-    //                               do not apply.
-    //   //! symbols <a>,<b>,...     - restricts emission to an allowlist of function
-    //                               names (comma-separated); only those functions and
-    //                               their transitive type/const closure are emitted,
-    //                               every other root is suppressed.
-    let contents = std::fs::read_to_string(&input_path).unwrap();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let input = root.join("input").join(format!("{name}.h"));
+    let source = std::fs::read_to_string(&input).unwrap();
     let mut namespace = "Test".to_string();
-    let mut library = String::new();
-    let mut filters: Vec<String> = vec![];
-    let mut extra_args: Vec<String> = vec![];
-    let mut map: Vec<(String, String)> = vec![];
-    let mut references: Vec<String> = vec![];
-    let mut flat = false;
-    let mut symbols: Vec<String> = vec![];
+    let mut library = "test.dll".to_string();
+    let mut args = vec!["-x", "c++"];
+    let mut reference_default = false;
 
-    for line in contents.lines() {
-        let Some(rest) = line.strip_prefix("//!") else {
-            continue;
+    for line in source.lines() {
+        let Some(directive) = line.strip_prefix("//!") else {
+            break;
         };
-        let rest = rest.trim();
-        if let Some(ns) = rest.strip_prefix("namespace ") {
-            namespace = ns.trim().to_string();
-        } else if let Some(lib) = rest.strip_prefix("library ") {
-            library = lib.trim().to_string();
-        } else if let Some(m) = rest.strip_prefix("map ") {
-            if let Some((symbol, dll)) = m.trim().split_once('=') {
-                map.push((symbol.trim().to_string(), dll.trim().to_string()));
-            }
-        } else if let Some(f) = rest.strip_prefix("filter ") {
-            filters.push(f.trim().to_string());
-        } else if let Some(a) = rest.strip_prefix("args ") {
-            extra_args.extend(a.split_whitespace().map(String::from));
-        } else if let Some(inc) = rest.strip_prefix("include ") {
-            extra_args.push("-I".to_string());
-            extra_args.push(inc.trim().to_string());
-        } else if let Some(r) = rest.strip_prefix("reference ") {
-            references.push(r.trim().to_string());
-        } else if let Some(s) = rest.strip_prefix("symbols ") {
-            symbols.extend(s.split(',').map(|t| t.trim().to_string()));
-        } else if rest == "flat" {
-            flat = true;
+        let directive = directive.trim();
+        if let Some(value) = directive.strip_prefix("namespace ") {
+            namespace = value.trim().to_string();
+        } else if let Some(value) = directive.strip_prefix("library ") {
+            library = value.trim().to_string();
+        } else if let Some(value) = directive.strip_prefix("args ") {
+            args = value.split_whitespace().collect();
+        } else if directive == "reference-default" {
+            reference_default = true;
+        } else {
+            panic!("unknown fixture directive `{directive}`");
         }
     }
 
-    // Compile any reference RDL fixtures to winmd so they can be fed to the
-    // scraper as cross-namespace references.
-    let mut reference_winmds: Vec<Vec<u8>> = vec![];
-    for reference in &references {
-        let ref_rdl = format!("input/{reference}.rdl");
-        let ref_winmd = format!("{scratch}/{reference}.winmd");
-        windows_rdl::reader()
-            .input(&ref_rdl)
-            .output(&ref_winmd)
-            .write()
-            .unwrap();
-        reference_winmds.push(std::fs::read(ref_winmd).unwrap());
-    }
-
-    let rdl_out = format!("{scratch}/{name}.rdl");
-
+    let output = std::path::Path::new(env!("OUT_DIR")).join(format!("{name}.rdl"));
     let mut clang = windows_clang::clang();
     clang
-        .args([
-            "-x",
-            "c++",
-            "--target=x86_64-pc-windows-msvc",
-            "-fms-extensions",
-        ])
-        .args(extra_args.iter().map(|s| s.as_str()))
-        .input(&input_path)
-        .output(&rdl_out)
-        .namespace(&namespace);
-
-    clang.resolution_default();
-
-    clang.reference_byte_sets(&reference_winmds);
-
-    if !library.is_empty() {
-        clang.library(&library);
+        .input(&input)
+        .args(args)
+        .namespace(&namespace)
+        .library(library)
+        .output(&output);
+    if reference_default {
+        clang.reference_default();
     }
+    clang.write().unwrap();
 
-    if !map.is_empty() {
-        clang.libraries(map.iter().map(|(s, d)| (s.as_str(), d.as_str())));
-    }
-
-    for f in &filters {
-        clang.filter(f);
-    }
-
-    if !symbols.is_empty() {
-        clang.symbols(symbols.iter().map(|s| s.as_str()));
-    }
-
-    // libclang's process-global state is not safe under the harness's parallel test threads;
-    // serialize the scrape (see `test_clang::libclang_guard`).
-    let _guard = test_clang::libclang_guard();
-
-    if flat {
-        // Source-based per-header (flat) scrape, as `tool-win32`: one flat root namespace,
-        // `header_root.is_some()`. Emits every defining header in the parse into `scratch`;
-        // a self-contained fixture yields a single `<stem>.rdl` (the lowercased header stem,
-        // which matches `rdl_out`).
-        clang
-            .namespace(&namespace)
-            .output(&scratch)
-            .write_by_header()
-            .unwrap();
-    } else {
-        // Namespaced scrape, as `tool-webview`: `header_root.is_none()`, resolves external
-        // types via the reference winmds.
-        clang.write().unwrap();
-    }
-
-    let actual = std::fs::read_to_string(&rdl_out).unwrap();
-    std::fs::write(&expected_path, &actual).unwrap();
+    let actual = std::fs::read_to_string(output).unwrap();
+    let mut reader = windows_rdl::reader();
+    reader
+        .input_text(&actual)
+        .reference_default()
+        .output(std::path::Path::new(env!("OUT_DIR")).join(format!("{name}.winmd")));
+    reader.write().unwrap();
+    let expected = root.join("expected");
+    std::fs::create_dir_all(&expected).unwrap();
+    std::fs::write(expected.join(format!("{name}.rdl")), actual).unwrap();
 }

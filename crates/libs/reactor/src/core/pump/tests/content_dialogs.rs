@@ -1,4 +1,4 @@
-use super::super::*;
+use super::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -555,6 +555,7 @@ fn rejects_direct_native_and_nested_overlay_ownership() {
             Button::new()
                 .content(TextBlock::new().text("Owner"))
                 .flyout_with(Flyout::rich(dialog(false)))
+                .into()
         ),
         Err(PumpError::StructureUnsupported)
     );
@@ -567,9 +568,7 @@ fn rejects_direct_native_and_nested_overlay_ownership() {
 
     let mut named_slot = Pump::new(RecordingRuntime::default());
     assert_eq!(
-        named_slot.mount_view(
-            SplitView::new().slots([SlotView::new(SplitViewSlot::Content, dialog(false),)])
-        ),
+        named_slot.mount_view(SplitView::new().content(dialog(false)).into()),
         Err(PumpError::StructureUnsupported)
     );
 }

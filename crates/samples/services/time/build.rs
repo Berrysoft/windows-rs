@@ -1,6 +1,8 @@
 fn main() {
+    let bindings = format!("{}/bindings.rs", std::env::var("OUT_DIR").unwrap());
+
     windows_bindgen::builder()
-        .output("src/bindings.rs")
+        .output(bindings)
         .flat()
         .sys()
         .filters([
@@ -10,6 +12,6 @@ fn main() {
             "FileTimeToSystemTime",
             "FileTimeToLocalFileTime",
         ])
-        .derives(["SYSTEMTIME=Debug", "SERVICE_TIMECHANGE_INFO=Debug"])
+        .derives(["SYSTEMTIME=Debug"])
         .write();
 }

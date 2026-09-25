@@ -85,48 +85,16 @@ pub(crate) fn generate_control_bindings_filter(schema: &ResolvedSchema) -> Strin
                             .to_string(),
                     );
                 }
-                Some(PropertyAdapter::ClockIdentifier)
-                | Some(PropertyAdapter::ContentDialogResult)
-                | Some(PropertyAdapter::FontWeight)
-                | Some(PropertyAdapter::HorizontalContentAlignment)
-                | Some(PropertyAdapter::ImageUri)
-                | Some(PropertyAdapter::InspectableString)
-                | Some(PropertyAdapter::InspectableStringList)
-                | Some(PropertyAdapter::ItemTag)
-                | Some(PropertyAdapter::ItemTags)
-                | Some(PropertyAdapter::NavigationDisplayMode)
-                | Some(PropertyAdapter::NumberBoxValue)
-                | Some(PropertyAdapter::PathData)
-                | Some(PropertyAdapter::PointerCapture)
-                | Some(PropertyAdapter::PointerEvent)
-                | Some(PropertyAdapter::RatingValue)
-                | Some(PropertyAdapter::DragInfo)
-                | Some(PropertyAdapter::DropData)
-                | Some(PropertyAdapter::DropPolicy)
-                | Some(PropertyAdapter::ResourceOverrides)
-                | Some(PropertyAdapter::ResourceStyle)
-                | Some(PropertyAdapter::RichEditText)
-                | Some(PropertyAdapter::RichTextBlocks)
-                | Some(PropertyAdapter::SelectionIndex)
-                | Some(PropertyAdapter::TreeNodeContent)
-                | Some(PropertyAdapter::Uri)
-                | Some(PropertyAdapter::VerticalContentAlignment)
-                | None => {}
+                _ => {}
             }
-            if property
-                .adapter
-                .is_none_or(|adapter| adapter.capabilities().uses_property_setter)
-            {
+            if property.uses_property_setter {
                 entries.insert(format!(
                     "{}::put_{}",
                     filter_path(&property.interface),
                     property.name
                 ));
             }
-            if property
-                .adapter
-                .is_none_or(|adapter| adapter.capabilities().uses_dependency_property)
-            {
+            if property.uses_dependency_property {
                 entries.insert(format!(
                     "{}::{}Property",
                     filter_path(&property.static_owner),
@@ -293,23 +261,14 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             }
         }
     });
-    let virtual_create = schema
+    let unsupported_create = schema
         .controls
         .iter()
-        .filter(|control| matches!(control.role, Role::Virtual))
-        .map(|control| {
-            let name = ident(&control.name);
-            quote! {
-                MountedKind::#name => return Err(RuntimeError::UnsupportedKind)
-            }
-        });
-    let ui_elements = native_controls.iter().map(|control| {
+        .any(|control| matches!(control.role, Role::Virtual))
+        .then(|| quote! { _ => return Err(RuntimeError::UnsupportedKind) });
+    let inspectables = native_controls.iter().map(|control| {
         let name = ident(&control.name);
-        quote! { Self::#name(value) => value.cast() }
-    });
-    let dependency_objects = native_controls.iter().map(|control| {
-        let name = ident(&control.name);
-        quote! { Self::#name(value) => value.cast() }
+        quote! { Self::#name(value) => value.into() }
     });
     let kinds = native_controls.iter().map(|control| {
         let name = ident(&control.name);
@@ -349,12 +308,14 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
         control
             .properties
             .iter()
+            .filter(|property| !is_handwritten_property_adapter(property))
             .map(move |property| generate_set_property(control, property))
     });
     let clear_properties = schema.controls.iter().flat_map(|control| {
         control
             .properties
             .iter()
+            .filter(|property| !is_handwritten_property_adapter(property))
             .map(move |property| generate_clear_property(control, property))
     });
     let events = schema.controls.iter().flat_map(|control| {
@@ -422,7 +383,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             let event_id = ident(&format!("{}{}", control.name, feedback));
             let value_variant = ident(&property.value);
             match property.feedback_contract.unwrap() {
-                FeedbackContract::SynchronousExact => {
+                FeedbackContract::Exact => {
                     let value = if property.copy {
                         quote! { *value }
                     } else {
@@ -438,7 +399,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                         ))
                     })
                 }
-                FeedbackContract::SynchronousNormalized => Some(quote! {
+                FeedbackContract::Normalized => Some(quote! {
                     (PropertyId::#property_id, Some(_)) => {
                         Some((
                             EventId::#event_id,
@@ -446,6 +407,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                         ))
                     }
                 }),
+                FeedbackContract::DeferredExact => None,
             }
         })
     });
@@ -456,7 +418,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             let event_id = ident(&format!("{}{}", control.name, feedback));
             let value_variant = ident(&property.value);
             match property.feedback_contract.unwrap() {
-                FeedbackContract::SynchronousExact => {
+                FeedbackContract::Exact => {
                     if property.adapter == Some(PropertyAdapter::SelectionIndex) {
                         return Some(quote! {
                             (PropertyId::#property_id, None) => Some((
@@ -475,7 +437,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                         ))
                     })
                 }
-                FeedbackContract::SynchronousNormalized => Some(quote! {
+                FeedbackContract::Normalized => Some(quote! {
                     (PropertyId::#property_id, None) => {
                         Some((
                             EventId::#event_id,
@@ -483,6 +445,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                         ))
                     }
                 }),
+                FeedbackContract::DeferredExact => None,
             }
         })
     });
@@ -505,7 +468,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
     let selected_items = schema.controls.iter().filter_map(|control| {
         let selection = control.selection.as_ref()?;
         let control_name = ident(&control.name);
-        let slot = ident(&format!("{}{}", control.name, selection.slot));
+        let event = ident(&format!("{}{}", control.name, selection.event));
         let interface = path_ident(&selection.owner_interface);
         let getter = ident(&selection.selected_item_property);
         let get = if is_default_interface(control, &selection.owner_interface) {
@@ -519,7 +482,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             quote! { Ok(Some(selected)) }
         };
         Some(quote! {
-            (Handle::#control_name(value), SlotId::#slot) => {
+            (Handle::#control_name(value), EventId::#event) => {
                 match #get {
                     Ok(selected) => #selected,
                     Err(error) if error.code().is_ok() => Ok(None),
@@ -531,7 +494,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
     let set_selected_items = schema.controls.iter().filter_map(|control| {
         let selection = control.selection.as_ref()?;
         let control_name = ident(&control.name);
-        let slot = ident(&format!("{}{}", control.name, selection.slot));
+        let event = ident(&format!("{}{}", control.name, selection.event));
         let interface = path_ident(&selection.owner_interface);
         let setter = ident(&format!("Set{}", selection.selected_item_property));
         let set = if let Some(item) = selection.selected_item.as_deref() {
@@ -560,7 +523,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             }
         };
         Some(quote! {
-            (Handle::#control_name(value), SlotId::#slot) => #set.map_err(native_error),
+            (Handle::#control_name(value), EventId::#event) => #set.map_err(native_error),
         })
     });
     let selection_item_states = schema.controls.iter().filter_map(|control| {
@@ -666,19 +629,14 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             pub fn create(kind: MountedKind) -> Result<Self, RuntimeError> {
                 Ok(match kind {
                     #(#create,)*
-                    #(#virtual_create),*
+                    #unsupported_create
                 })
             }
 
-            pub fn ui_element(&self) -> windows_core::Result<UIElement> {
+            #[inline]
+            pub fn inspectable(&self) -> &windows_core::IInspectable {
                 match self {
-                    #(#ui_elements),*
-                }
-            }
-
-            pub fn dependency_object(&self) -> windows_core::Result<IDependencyObject> {
-                match self {
-                    #(#dependency_objects),*
+                    #(#inspectables),*
                 }
             }
 
@@ -727,7 +685,6 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             handle: &Handle,
             property: PropertyId,
         ) -> Result<(), RuntimeError> {
-            let dependency_object = handle.dependency_object().map_err(native_error)?;
             match (handle, property) {
                 #(#clear_properties,)*
                 _ => Err(RuntimeError::UnsupportedKind),
@@ -759,7 +716,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             handle: &Handle,
             selection: SelectionDescriptor,
         ) -> Result<Option<windows_core::IInspectable>, RuntimeError> {
-            match (handle, selection.slot) {
+            match (handle, selection.event) {
                 #(#selected_items,)*
                 _ => Ok(None),
             }
@@ -770,7 +727,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             selection: SelectionDescriptor,
             selected: &windows_core::IInspectable,
         ) -> Result<(), RuntimeError> {
-            match (handle, selection.slot) {
+            match (handle, selection.event) {
                 #(#set_selected_items)*
                 _ => Ok(()),
             }
@@ -838,6 +795,14 @@ fn generate_set_content(
     content: &crate::schema::ResolvedContent,
 ) -> TokenStream {
     let control_name = ident(&control.name);
+    if content.name == "Content"
+        && content.interface == "Microsoft.UI.Xaml.Controls.IContentControl"
+        && matches!(content.target, SlotTarget::Inspectable)
+    {
+        return quote! {
+            Handle::#control_name(control) => set_content_control(control, child)
+        };
+    }
     let interface = path_ident(&content.interface);
     let setter = ident(&format!("Set{}", content.name));
     let value = match content.target {
@@ -1058,27 +1023,7 @@ fn generate_event_arm(control: &ResolvedControl, event: &ResolvedEvent) -> Token
     let control_name = ident(&control.name);
     let event_id = ident(&format!("{}{}", control.name, event.name));
     let interface = path_ident(&event.interface);
-    let method = ident(&event.name);
     let payload = ident(&event.payload);
-    let pointer_capture = (event.name == "PointerPressed").then(|| {
-        quote! {
-            info.capture_succeeded = match sink.capture_pointer_on_press(node, &element, args) {
-                Ok(value) => value,
-                Err(error) => {
-                    sink.error(node, EventId::#event_id, revision, error);
-                    return;
-                }
-            };
-        }
-    });
-    let pointer_release = (event.name == "PointerReleased").then(|| {
-        quote! {
-            if let Err(error) = sink.release_pointer_after_event(node, &element, args) {
-                sink.error(node, EventId::#event_id, revision, error);
-                return;
-            }
-        }
-    });
     let payload_value = if event.payload == "ContentDialogResult" {
         quote! {
             match value.0 {
@@ -1116,6 +1061,7 @@ fn generate_event_arm(control: &ResolvedControl, event: &ResolvedEvent) -> Token
     };
     let content_dialog_closed = control.lifecycle == Some(crate::schema::Lifecycle::ContentDialog)
         && event.name == "Closed";
+    let method = ident(&event.name);
     let lifecycle_completion = content_dialog_closed.then(|| {
         quote! {
             let invoke_callback = match sink.content_dialog_closed(node, revision) {
@@ -1158,69 +1104,46 @@ fn generate_event_arm(control: &ResolvedControl, event: &ResolvedEvent) -> Token
         }
     });
     let shared_event_source = matches!(&event.subscription, EventSubscription::Metadata)
+        && !inspectable_routed_event(event)
+        && !inspectable_selection_changed_event(event)
         && matches!(
             &event.source,
             EventPayloadSource::SenderProperty { interface, .. } if interface == &event.interface
         );
+    let text_input_probe = control.name == "TextBox" && event.name == "TextChanged";
     let callback = match &event.source {
-        EventPayloadSource::Unit => quote! {
-            move |_, _| {
-                sink.enqueue(
+        EventPayloadSource::Unit(sender, args) => {
+            if inspectable_routed_event(event) {
+                quote! {
+                    routed_event_handler(
+                        sink,
+                        node,
+                        EventId::#event_id,
+                        revision,
+                        RoutedEventAction::Unit,
+                    )
+                }
+            } else {
+                let sender = event_handler_type(sender);
+                let args = event_handler_type(args);
+                quote! {
+                    unit_event_handler::<#sender, #args>(
+                        sink,
+                        node,
+                        EventId::#event_id,
+                        revision,
+                    )
+                }
+            }
+        }
+        EventPayloadSource::DragInfo { interface: _ } => {
+            quote! {
+                drag_info_event_handler(
+                    sink,
                     node,
                     EventId::#event_id,
                     revision,
-                    EventPayload::Unit,
-                );
-            }
-        },
-        EventPayloadSource::DragInfo { interface: _ } => {
-            quote! {
-                move |_, args| {
-                    let result = args
-                        .as_ref()
-                        .ok_or_else(windows_core::Error::empty)
-                        .and_then(|args| {
-                            let data = args.DataView()?;
-                            let kind = if data.Contains("Shell IDList Array")? {
-                                DragKind::StorageItems
-                            } else if data.Contains("Text")? {
-                                DragKind::Text
-                            } else {
-                                DragKind::Unsupported
-                            };
-                            let action = sink.drag_action(node, kind);
-                            args.SetAcceptedOperation(
-                                action
-                                    .as_ref()
-                                    .map_or(DataPackageOperation::None, |action| {
-                                        native_drag_operation(action.operation)
-                                    }),
-                            )?;
-                            let ui = args.DragUIOverride()?;
-                            if let Some(caption) =
-                                action.as_ref().and_then(|action| action.caption.as_deref())
-                            {
-                                ui.SetCaption(caption)?;
-                                ui.SetIsCaptionVisible(true)?;
-                            } else {
-                                ui.SetIsCaptionVisible(false)?;
-                            }
-                            Ok(action.map_or(DragKind::Unsupported, |_| kind))
-                        });
-                    match result {
-                        Ok(kind) => sink.enqueue(
-                            node,
-                            EventId::#event_id,
-                            revision,
-                            EventPayload::DragKind(kind),
-                        ),
-                        Err(error) => {
-                            sink.error(
-                                node, EventId::#event_id, revision, native_error(error),
-                            );
-                        }
-                    };
-                }
+                )
             }
         }
         EventPayloadSource::DropData { interface: _ } => {
@@ -1343,10 +1266,55 @@ fn generate_event_arm(control: &ResolvedControl, event: &ResolvedEvent) -> Token
             interface: property_interface,
             property,
         } => {
+            let routed_action = inspectable_routed_event(event)
+                .then(|| match property_interface.as_str() {
+                    "Microsoft.UI.Xaml.Controls.IPasswordBox" if property == "Password" => {
+                        Some(quote! { RoutedEventAction::Password(event_source) })
+                    }
+                    "Microsoft.UI.Xaml.Controls.IToggleSwitch" if property == "IsOn" => {
+                        Some(quote! { RoutedEventAction::ToggleSwitch(event_source) })
+                    }
+                    _ => None,
+                })
+                .flatten();
+            let selection_index_action = (event.conversion
+                == EventPayloadConversion::SelectionIndex
+                && inspectable_selection_changed_event(event))
+            .then(|| match property_interface.as_str() {
+                "Microsoft.UI.Xaml.Controls.Primitives.ISelector" => {
+                    Some(quote! { SelectionChangedAction::IndexSelector(event_source) })
+                }
+                "Microsoft.UI.Xaml.Controls.IRadioButtons" => {
+                    Some(quote! { SelectionChangedAction::IndexRadioButtons(event_source) })
+                }
+                "Microsoft.UI.Xaml.Controls.IPivot" => {
+                    Some(quote! { SelectionChangedAction::IndexPivot(event_source) })
+                }
+                "Microsoft.UI.Xaml.Controls.ITabView" => {
+                    Some(quote! { SelectionChangedAction::IndexTabView(event_source) })
+                }
+                _ => None,
+            })
+            .flatten();
+            let toggle_button_checked = matches!(
+                &event.subscription,
+                EventSubscription::PropertyChanged { .. }
+            ) && property_interface
+                == "Microsoft.UI.Xaml.Controls.Primitives.IToggleButton"
+                && property == "IsChecked";
             let property = ident(property);
             let default_property_interface = is_default_interface(control, property_interface);
             let property_interface = path_ident(property_interface);
-            let event_source = if shared_event_source {
+            let event_source = if routed_action.is_some()
+                || selection_index_action.is_some()
+                || toggle_button_checked
+            {
+                Some(quote! {
+                    let event_source = value
+                        .cast::<#property_interface>()
+                        .map_err(native_error)?;
+                })
+            } else if shared_event_source {
                 None
             } else if default_property_interface {
                 Some(quote! {
@@ -1359,24 +1327,88 @@ fn generate_event_arm(control: &ResolvedControl, event: &ResolvedEvent) -> Token
                         .map_err(native_error)?;
                 })
             };
-            if event.conversion == EventPayloadConversion::Selection {
-                let dispatch = generate_selection_dispatch(control, event);
+            if let Some(action) = routed_action {
                 quote! {
                     {
                         #event_source
-                        move |_, _| {
-                            let value = event_source.#property();
-                            #dispatch
+                        routed_event_handler(
+                            sink,
+                            node,
+                            EventId::#event_id,
+                            revision,
+                            #action,
+                        )
+                    }
+                }
+            } else if toggle_button_checked {
+                quote! {
+                    {
+                        #event_source
+                        toggle_button_checked_handler(
+                            sink,
+                            node,
+                            EventId::#event_id,
+                            revision,
+                            event_source,
+                        )
+                    }
+                }
+            } else if let Some(action) = selection_index_action {
+                quote! {
+                    {
+                        #event_source
+                        selection_changed_handler(
+                            sink,
+                            node,
+                            EventId::#event_id,
+                            revision,
+                            #action,
+                        )
+                    }
+                }
+            } else if event.conversion == EventPayloadConversion::Selection {
+                if inspectable_selection_changed_event(event) && control.name == "ListBox" {
+                    quote! {
+                        {
+                            #event_source
+                            selection_changed_handler(
+                                sink,
+                                node,
+                                EventId::#event_id,
+                                revision,
+                                SelectionChangedAction::ListBox(event_source),
+                            )
+                        }
+                    }
+                } else {
+                    let dispatch = generate_selection_dispatch(control, event);
+                    quote! {
+                        {
+                            #event_source
+                            move |_, _| {
+                                let value = event_source.#property();
+                                #dispatch
+                            }
                         }
                     }
                 }
-            } else {
+            } else if text_input_probe {
                 quote! {
                     {
                         #event_source
                         move |_, _| {
+                            #[cfg(feature = "test")]
+                            test::record_live_input_probe_stage(
+                                test::LiveInputProbeStage::NativeTextChanged,
+                            );
                             match event_source.#property() {
-                                Ok(value) => #enqueue_payload,
+                                Ok(value) => {
+                                    #[cfg(feature = "test")]
+                                    test::record_live_input_probe_stage(
+                                        test::LiveInputProbeStage::NativeTextReady,
+                                    );
+                                    #enqueue_payload;
+                                }
                                 #nullable_error
                                 Err(error) => sink.error(
                                     node,
@@ -1385,6 +1417,22 @@ fn generate_event_arm(control: &ResolvedControl, event: &ResolvedEvent) -> Token
                                     native_error(error),
                                 ),
                             }
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    {
+                        #event_source
+                        move |_, _| match event_source.#property() {
+                            Ok(value) => #enqueue_payload,
+                            #nullable_error
+                            Err(error) => sink.error(
+                                node,
+                                EventId::#event_id,
+                                revision,
+                                native_error(error),
+                            ),
                         }
                     }
                 }
@@ -1459,85 +1507,97 @@ fn generate_event_arm(control: &ResolvedControl, event: &ResolvedEvent) -> Token
         }
         EventPayloadSource::SenderRichEditText {
             interface: property_interface,
-            property,
+            property: _,
         } => {
-            let property = ident(property);
-            let event_source = if is_default_interface(control, property_interface) {
-                quote! { let event_source = (*value).clone(); }
-            } else {
-                let property_interface = path_ident(property_interface);
-                quote! {
+            assert!(inspectable_routed_event(event));
+            let property_interface = path_ident(property_interface);
+            quote! {
+                {
                     let event_source = value
                         .cast::<#property_interface>()
                         .map_err(native_error)?;
+                    routed_event_handler(
+                        sink,
+                        node,
+                        EventId::#event_id,
+                        revision,
+                        RoutedEventAction::RichEdit(event_source),
+                    )
                 }
+            }
+        }
+        EventPayloadSource::PointerEvent => {
+            let phase = match event.name.as_str() {
+                "PointerPressed" => quote! { PointerEventPhase::Press },
+                "PointerReleased" => quote! { PointerEventPhase::Release },
+                _ => quote! { PointerEventPhase::Plain },
             };
             quote! {
-                {
-                    #event_source
-                    move |_, _| {
-                        let value = event_source.#property().and_then(|document| {
-                            let mut value = windows_core::HSTRING::new();
-                            document
-                                .GetText(bindings::TextGetOptions::None, &mut value)
-                                .map(|_| value)
-                        });
-                        match value {
-                            Ok(value) => sink.enqueue(
-                                node,
-                                EventId::#event_id,
-                                revision,
-                                EventPayload::Str(value.to_string_lossy()),
-                            ),
-                            Err(error) => sink.error(
+                pointer_event_handler(
+                    sink,
+                    node,
+                    EventId::#event_id,
+                    revision,
+                    value.cast::<UIElement>().map_err(native_error)?,
+                    #phase,
+                )
+            }
+        }
+        EventPayloadSource::KeyEvent => quote! {
+            key_event_handler(
+                sink,
+                node,
+                EventId::#event_id,
+                revision,
+            )
+        },
+        EventPayloadSource::CharacterEvent => quote! {
+            move |_, args| {
+                let result = args
+                    .as_ref()
+                    .ok_or_else(windows_core::Error::empty)
+                    .and_then(character_event_info);
+                match result {
+                    Ok(info) => {
+                        let handled =
+                            sink.route_character(node, EventId::#event_id, revision, info);
+                        if let Some(args) = args.as_ref()
+                            && let Err(error) = args.SetHandled(handled)
+                        {
+                            sink.error(
                                 node,
                                 EventId::#event_id,
                                 revision,
                                 native_error(error),
-                            ),
+                            );
                         }
                     }
-                }
-            }
-        }
-        EventPayloadSource::PointerEvent => quote! {
-            {
-                let element = value.cast::<UIElement>().map_err(native_error)?;
-                move |_, args| {
-                    let mut info = crate::PointerEventInfo::default();
-                    if let Some(args) = args.as_ref() {
-                        if let Ok(point) = args.GetCurrentPoint(&element) {
-                            if let Ok(position) = point.Position() {
-                                info.x = f64::from(position.x);
-                                info.y = f64::from(position.y);
-                            }
-                            if let Ok(properties) = point.Properties() {
-                                info.is_left_button_pressed =
-                                    properties.IsLeftButtonPressed().unwrap_or(false);
-                                info.is_right_button_pressed =
-                                    properties.IsRightButtonPressed().unwrap_or(false);
-                                info.is_middle_button_pressed =
-                                    properties.IsMiddleButtonPressed().unwrap_or(false);
-                            }
-                        }
-                        if let Ok(point) = args.GetCurrentPoint(None::<&UIElement>)
-                            && let Ok(position) = point.Position()
-                        {
-                            info.window_x = f64::from(position.x);
-                            info.window_y = f64::from(position.y);
-                        }
+                    Err(error) => {
+                        sink.error(
+                            node,
+                            EventId::#event_id,
+                            revision,
+                            native_error(error),
+                        );
                     }
-                    #pointer_capture
-                    #pointer_release
-                    sink.enqueue(
-                        node,
-                        EventId::#event_id,
-                        revision,
-                        EventPayload::PointerEventInfo(info),
-                    );
                 }
             }
         },
+        EventPayloadSource::FocusEvent => {
+            let got_focus = event.name == "GotFocus";
+            quote! {
+                routed_event_handler(
+                    sink,
+                    node,
+                    EventId::#event_id,
+                    revision,
+                    RoutedEventAction::Focus(
+                        value.cast::<UIElement>().map_err(native_error)?,
+                        #got_focus,
+                    ),
+                )
+            }
+        }
         EventPayloadSource::EventArgsItemTag {
             interface: _,
             property,
@@ -1616,40 +1676,55 @@ fn generate_event_arm(control: &ResolvedControl, event: &ResolvedEvent) -> Token
             interface: property_interface,
             property,
         } => {
-            let property = ident(property);
-            let property_interface = path_ident(property_interface);
-            quote! {
-                move |sender, _| {
-                    if let Some(sender) = sender.as_ref() {
-                        let result = sender
-                            .cast::<#property_interface>()
-                            .and_then(|sender| sender.#property())
-                            .and_then(|items| {
-                                let mut tags = Vec::with_capacity(items.Size()? as usize);
-                                for index in 0..items.Size()? {
-                                    let tag = items
-                                        .GetAt(index)?
-                                        .cast::<IFrameworkElement>()?
-                                        .Tag()?
-                                        .cast::<windows_reference::IReference<windows_core::HSTRING>>()?
-                                        .Value()?;
-                                    tags.push(tag.to_string_lossy());
-                                }
-                                Ok(tags)
-                            });
-                        match result {
-                            Ok(value) => sink.enqueue(
-                                node,
-                                EventId::#event_id,
-                                revision,
-                                EventPayload::StrList(std::rc::Rc::new(value)),
-                            ),
-                            Err(error) => sink.error(
-                                node,
-                                EventId::#event_id,
-                                revision,
-                                native_error(error),
-                            ),
+            if matches!(control.name.as_str(), "ListView" | "GridView")
+                && event.name == "DragItemsCompleted"
+                && property_interface == "Microsoft.UI.Xaml.Controls.IItemsControl"
+                && property == "Items"
+            {
+                quote! {
+                    list_view_items_changed_handler(
+                        sink,
+                        node,
+                        EventId::#event_id,
+                        revision,
+                    )
+                }
+            } else {
+                let property = ident(property);
+                let property_interface = path_ident(property_interface);
+                quote! {
+                    move |sender, _| {
+                        if let Some(sender) = sender.as_ref() {
+                            let result = sender
+                                .cast::<#property_interface>()
+                                .and_then(|sender| sender.#property())
+                                .and_then(|items| {
+                                    let mut tags = Vec::with_capacity(items.Size()? as usize);
+                                    for index in 0..items.Size()? {
+                                        let tag = items
+                                            .GetAt(index)?
+                                            .cast::<IFrameworkElement>()?
+                                            .Tag()?
+                                            .cast::<windows_reference::IReference<windows_core::HSTRING>>()?
+                                            .Value()?;
+                                        tags.push(tag.to_string_lossy());
+                                    }
+                                    Ok(tags)
+                                });
+                            match result {
+                                Ok(value) => sink.enqueue(
+                                    node,
+                                    EventId::#event_id,
+                                    revision,
+                                    EventPayload::StrList(std::rc::Rc::new(value)),
+                                ),
+                                Err(error) => sink.error(
+                                    node,
+                                    EventId::#event_id,
+                                    revision,
+                                    native_error(error),
+                                ),
+                            }
                         }
                     }
                 }
@@ -1726,6 +1801,19 @@ fn property_receiver(control: &ResolvedControl, property: &ResolvedProperty) -> 
         let interface = path_ident(&property.interface);
         quote! { control.cast::<#interface>().map_err(native_error)? }
     }
+}
+
+fn is_handwritten_property_adapter(property: &ResolvedProperty) -> bool {
+    matches!(
+        property.adapter,
+        Some(
+            PropertyAdapter::PointerCapture
+                | PropertyAdapter::PointerFocus
+                | PropertyAdapter::DropPolicy
+                | PropertyAdapter::ResourceOverrides
+                | PropertyAdapter::KeyAccelerators
+        )
+    )
 }
 
 fn generate_set_property(control: &ResolvedControl, property: &ResolvedProperty) -> TokenStream {
@@ -1914,41 +2002,7 @@ fn generate_set_property(control: &ResolvedControl, property: &ResolvedProperty)
                 Handle::#control_name(control),
                 PropertyId::#property_id,
                 PropertyValue::Str(value),
-            ) => set_rich_edit_text(control, value)
-        };
-    }
-    if property.adapter == Some(PropertyAdapter::PointerCapture) {
-        return quote! {
-            (Handle::#control_name(_), PropertyId::#property_id, PropertyValue::Bool(_)) => {
-                Err(RuntimeError::UnsupportedKind)
-            }
-        };
-    }
-    if property.adapter == Some(PropertyAdapter::DropPolicy) {
-        return quote! {
-            (
-                Handle::#control_name(_),
-                PropertyId::#property_id,
-                PropertyValue::DragDropPolicy(_),
-            ) => Err(RuntimeError::UnsupportedKind)
-        };
-    }
-    if property.adapter == Some(PropertyAdapter::ResourceOverrides) {
-        return quote! {
-            (
-                Handle::#control_name(_),
-                PropertyId::#property_id,
-                PropertyValue::ResourceOverrides(_),
-            ) => Err(RuntimeError::UnsupportedKind)
-        };
-    }
-    if property.adapter == Some(PropertyAdapter::KeyAccelerators) {
-        return quote! {
-            (
-                Handle::#control_name(_),
-                PropertyId::#property_id,
-                PropertyValue::KeyAccelerators(_),
-            ) => Err(RuntimeError::UnsupportedKind)
+            ) => set_rich_edit_text(control, value).map(|_| ())
         };
     }
     if property.adapter == Some(PropertyAdapter::RichTextBlocks) {
@@ -2229,35 +2283,7 @@ fn generate_clear_property(control: &ResolvedControl, property: &ResolvedPropert
     if property.adapter == Some(PropertyAdapter::RichEditText) {
         return quote! {
             (Handle::#control_name(control), PropertyId::#property_id) => {
-                set_rich_edit_text(control, "")
-            }
-        };
-    }
-    if property.adapter == Some(PropertyAdapter::PointerCapture) {
-        return quote! {
-            (Handle::#control_name(_), PropertyId::#property_id) => {
-                Err(RuntimeError::UnsupportedKind)
-            }
-        };
-    }
-    if property.adapter == Some(PropertyAdapter::DropPolicy) {
-        return quote! {
-            (Handle::#control_name(_), PropertyId::#property_id) => {
-                Err(RuntimeError::UnsupportedKind)
-            }
-        };
-    }
-    if property.adapter == Some(PropertyAdapter::ResourceOverrides) {
-        return quote! {
-            (Handle::#control_name(_), PropertyId::#property_id) => {
-                Err(RuntimeError::UnsupportedKind)
-            }
-        };
-    }
-    if property.adapter == Some(PropertyAdapter::KeyAccelerators) {
-        return quote! {
-            (Handle::#control_name(_), PropertyId::#property_id) => {
-                Err(RuntimeError::UnsupportedKind)
+                set_rich_edit_text(control, "").map(|_| ())
             }
         };
     }
@@ -2265,15 +2291,13 @@ fn generate_clear_property(control: &ResolvedControl, property: &ResolvedPropert
         return quote! {
             (Handle::#control_name(control), PropertyId::#property_id) => control
                 .Blocks()
-                .and_then(|blocks| blocks.cast::<windows_collections::IVector<Block>>())
                 .and_then(|blocks| blocks.Clear())
                 .map_err(native_error)
         };
     }
     quote! {
-        (Handle::#control_name(_), PropertyId::#property_id) => dependency_object
-            .ClearValue(&bindings::#owner::#property_method().map_err(native_error)?)
-            .map_err(native_error)
+        (Handle::#control_name(_), PropertyId::#property_id) =>
+            clear_value(handle, bindings::#owner::#property_method)
     }
 }
 
@@ -2289,244 +2313,35 @@ fn path_ident(value: &str) -> Ident {
     ident(value.rsplit_once('.').map_or(value, |(_, name)| name))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::metadata::MetadataResolver;
-    use crate::schema::{Schema, workspace_path};
+fn event_handler_type(value: &crate::metadata::EventHandlerType) -> TokenStream {
+    match value {
+        crate::metadata::EventHandlerType::Inspectable => {
+            quote! { windows_core::IInspectable }
+        }
 
-    fn assert_compiles(body: TokenStream) {
-        let unique = format!(
-            "reactor_codegen_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let source = std::env::temp_dir().join(format!("{unique}.rs"));
-        let output = std::env::temp_dir().join(format!("{unique}.rmeta"));
-        std::fs::write(&source, body.to_string()).unwrap();
-        let result = std::process::Command::new("rustc")
-            .args(["--edition=2024", "--crate-type=lib", "--emit=metadata"])
-            .arg(&source)
-            .arg("-o")
-            .arg(&output)
-            .output()
-            .unwrap();
-        _ = std::fs::remove_file(source);
-        _ = std::fs::remove_file(output);
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
+        crate::metadata::EventHandlerType::Binding(value) => {
+            let value = ident(value);
+            quote! { bindings::#value }
+        }
     }
+}
 
-    fn schema() -> ResolvedSchema {
-        let source = include_str!("winui.toml");
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        Schema::parse(source).unwrap().resolve(&metadata).unwrap()
-    }
+fn inspectable_routed_event(event: &ResolvedEvent) -> bool {
+    matches!(
+        &event.handler,
+        Some((
+            crate::metadata::EventHandlerType::Inspectable,
+            crate::metadata::EventHandlerType::Binding(args),
+        )) if args == "RoutedEventArgs"
+    )
+}
 
-    #[test]
-    fn item_tags_payload_adds_its_sender_getter_to_the_bindings_filter() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TabView"
-
-[[control.event]]
-name = "TabItemsChanged"
-adapter = "item_tags"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let schema = Schema::parse(source).unwrap().resolve(&metadata).unwrap();
-        let filter = generate_control_bindings_filter(&schema);
-
-        assert!(filter.contains("Microsoft::UI::Xaml::Controls::ITabView::get_TabItems"));
-    }
-
-    #[test]
-    fn versioned_interfaces_use_the_metadata_runtime_class_for_static_properties() {
-        let schema = schema();
-        let navigation = schema
-            .controls
-            .iter()
-            .find(|control| control.name == "NavigationView")
-            .unwrap();
-        let property = navigation
-            .properties
-            .iter()
-            .find(|property| property.name == "IsBackButtonVisible")
-            .unwrap();
-
-        assert_eq!(
-            property.static_owner,
-            "Microsoft.UI.Xaml.Controls.NavigationView"
-        );
-    }
-
-    #[test]
-    fn event_args_use_the_getter_interface_and_wrapper_conversion() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.NumberBox"
-capabilities = ["layout"]
-
-[[control.event]]
-name = "ValueChanged"
-property = "NewValue"
-
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["layout"]
-
-[[control.event]]
-name = "Tapped"
-property = "FontWeight"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let schema = Schema::parse(source).unwrap().resolve(&metadata).unwrap();
-        let generated = generate(&schema);
-
-        assert!(!generated.contains("cast :: < INumberBoxValueChangedEventArgs >"));
-        assert!(generated.contains("EventPayload :: U16 (value . weight)"));
-    }
-
-    #[test]
-    fn accepted_event_payload_expressions_compile() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.NumberBox"
-capabilities = ["layout"]
-
-[[control.event]]
-name = "ValueChanged"
-property = "NewValue"
-
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["layout"]
-
-[[control.event]]
-name = "Tapped"
-property = "FontWeight"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let schema = Schema::parse(source).unwrap().resolve(&metadata).unwrap();
-        let event_id = ident("Other");
-        let number = generate_payload_value(&schema.controls[0].events[0].conversion, &event_id);
-        let weight = generate_payload_value(&schema.controls[1].events[0].conversion, &event_id);
-
-        assert_compiles(quote! {
-            struct FontWeight {
-                weight: u16,
-            }
-
-            fn number_payload(value: f64) -> f64 {
-                #number
-            }
-
-            fn weight_payload(value: FontWeight) -> u16 {
-                #weight
-            }
-        });
-
-        let number_arm = generate_event_arm(&schema.controls[0], &schema.controls[0].events[0]);
-        assert_compiles(quote! {
-            #[derive(Clone, Copy)]
-            struct RuntimeError;
-
-            fn native_error(error: RuntimeError) -> RuntimeError {
-                error
-            }
-
-            struct EventRevoker;
-
-            enum NativeSubscription {
-                Event {
-                    _revoker: EventRevoker,
-                    revision: u32,
-                },
-            }
-
-            #[derive(Clone, Copy)]
-            enum EventId {
-                NumberBoxValueChanged,
-                Other,
-            }
-
-            enum EventPayload {
-                F64(f64),
-            }
-
-            #[derive(Clone)]
-            struct EventSink;
-
-            impl EventSink {
-                fn enqueue(
-                    &self,
-                    _node: u32,
-                    _event: EventId,
-                    _revision: u32,
-                    _payload: EventPayload,
-                ) {
-                }
-
-                fn error(
-                    &self,
-                    _node: u32,
-                    _event: EventId,
-                    _revision: u32,
-                    _error: RuntimeError,
-                ) {
-                }
-            }
-
-            struct EventArgsRef(Option<EventArgs>);
-
-            impl EventArgsRef {
-                fn as_ref(&self) -> Option<&EventArgs> {
-                    self.0.as_ref()
-                }
-            }
-
-            struct EventArgs;
-
-            impl EventArgs {
-                fn NewValue(&self) -> Result<f64, RuntimeError> {
-                    Ok(1.0)
-                }
-            }
-
-            struct NumberBox;
-
-            impl NumberBox {
-                fn ValueChanged<F>(&self, _callback: F) -> Result<EventRevoker, RuntimeError>
-                where
-                    F: Fn((), EventArgsRef) + 'static,
-                {
-                    Ok(EventRevoker)
-                }
-            }
-
-            enum Handle {
-                NumberBox(NumberBox),
-                Other,
-            }
-
-            fn subscribe(
-                handle: &Handle,
-                node: u32,
-                event: EventId,
-                revision: u32,
-                sink: EventSink,
-            ) -> Result<NativeSubscription, RuntimeError> {
-                match (handle, event) {
-                    #number_arm,
-                    _ => Err(RuntimeError),
-                }
-            }
-        });
-    }
+fn inspectable_selection_changed_event(event: &ResolvedEvent) -> bool {
+    matches!(
+        &event.handler,
+        Some((
+            crate::metadata::EventHandlerType::Inspectable,
+            crate::metadata::EventHandlerType::Binding(args),
+        )) if args == "SelectionChangedEventArgs"
+    )
 }

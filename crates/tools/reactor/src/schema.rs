@@ -1,5 +1,7 @@
 use crate::helpers::to_snake_case;
-use crate::metadata::{CollectionType, MetadataResolver, ParamClass, ReadValueConversion};
+use crate::metadata::{
+    CollectionType, EventHandlerType, MetadataResolver, ParamClass, ReadValueConversion,
+};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -110,6 +112,8 @@ pub(crate) struct Property {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PropertyAdapter {
+    CharacterEvent,
+    FocusEvent,
     ClockIdentifier,
     ContentDialogResult,
     ImageUri,
@@ -119,12 +123,14 @@ pub(crate) enum PropertyAdapter {
     ImplicitScale,
     ImplicitScaleTransition,
     KeyAccelerators,
+    KeyEvent,
     ItemTag,
     ItemTags,
     NavigationDisplayMode,
     NumberBoxValue,
     PathData,
     PointerCapture,
+    PointerFocus,
     PointerEvent,
     DragInfo,
     DropData,
@@ -143,9 +149,9 @@ pub(crate) enum PropertyAdapter {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct PropertyAdapterCapabilities {
-    pub(crate) uses_dependency_property: bool,
-    pub(crate) uses_property_setter: bool,
+struct PropertyAdapterCapabilities {
+    uses_dependency_property: bool,
+    uses_property_setter: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -171,6 +177,7 @@ struct PropertyAdapterContract {
     value: &'static str,
     copy: bool,
     requirement: &'static str,
+    capabilities: PropertyAdapterCapabilities,
 }
 
 enum PropertyAdapterKind {
@@ -179,54 +186,23 @@ enum PropertyAdapterKind {
     EventOnly(&'static str),
 }
 
-impl PropertyAdapter {
-    pub(crate) fn capabilities(self) -> PropertyAdapterCapabilities {
+impl PropertyAdapterKind {
+    fn capabilities(&self) -> PropertyAdapterCapabilities {
         match self {
+            Self::Property(contract) => contract.capabilities,
             Self::ResourceStyle => PropertyAdapterCapabilities {
                 uses_dependency_property: true,
                 uses_property_setter: false,
             },
-            Self::DropPolicy
-            | Self::KeyAccelerators
-            | Self::PointerCapture
-            | Self::ResourceOverrides
-            | Self::RichEditText
-            | Self::RichTextBlocks => PropertyAdapterCapabilities {
-                uses_dependency_property: false,
-                uses_property_setter: false,
-            },
-            Self::ImplicitOpacityTransition
-            | Self::ImplicitScale
-            | Self::ImplicitScaleTransition => PropertyAdapterCapabilities {
-                uses_dependency_property: false,
-                uses_property_setter: true,
-            },
-            Self::ClockIdentifier
-            | Self::ContentDialogResult
-            | Self::DragInfo
-            | Self::DropData
-            | Self::FontWeight
-            | Self::HorizontalContentAlignment
-            | Self::ImageUri
-            | Self::InspectableString
-            | Self::InspectableStringList
-            | Self::ItemTag
-            | Self::ItemTags
-            | Self::NavigationDisplayMode
-            | Self::NumberBoxValue
-            | Self::PathData
-            | Self::PointerEvent
-            | Self::RatingValue
-            | Self::SelectionIndex
-            | Self::TreeNodeContent
-            | Self::Uri
-            | Self::VerticalContentAlignment => PropertyAdapterCapabilities {
+            Self::EventOnly(_) => PropertyAdapterCapabilities {
                 uses_dependency_property: true,
                 uses_property_setter: true,
             },
         }
     }
+}
 
+impl PropertyAdapter {
     fn property_kind(self) -> PropertyAdapterKind {
         use PropertyAdapterMetadata::{None, Param, ParamType, SingleField, ValueType};
         use PropertyAdapterTargets::{Any, OneOf, Property};
@@ -244,14 +220,54 @@ impl PropertyAdapter {
         const TEXT_BLOCK: &str = "Microsoft.UI.Xaml.Controls.TextBlock";
         const TIME_PICKER: &str = "Microsoft.UI.Xaml.Controls.TimePicker";
 
-        let property = |targets, metadata, value, copy, requirement| {
+        let property_with = |targets, metadata, value, copy, requirement, capabilities| {
             PropertyAdapterKind::Property(PropertyAdapterContract {
                 targets,
                 metadata,
                 value,
                 copy,
                 requirement,
+                capabilities,
             })
+        };
+        let property = |targets, metadata, value, copy, requirement| {
+            property_with(
+                targets,
+                metadata,
+                value,
+                copy,
+                requirement,
+                PropertyAdapterCapabilities {
+                    uses_dependency_property: true,
+                    uses_property_setter: true,
+                },
+            )
+        };
+        let synthetic_property = |targets, metadata, value, copy, requirement| {
+            property_with(
+                targets,
+                metadata,
+                value,
+                copy,
+                requirement,
+                PropertyAdapterCapabilities {
+                    uses_dependency_property: false,
+                    uses_property_setter: false,
+                },
+            )
+        };
+        let setter_property = |targets, metadata, value, copy, requirement| {
+            property_with(
+                targets,
+                metadata,
+                value,
+                copy,
+                requirement,
+                PropertyAdapterCapabilities {
+                    uses_dependency_property: false,
+                    uses_property_setter: true,
+                },
+            )
         };
         match self {
             Self::ImageUri => property(
@@ -282,28 +298,28 @@ impl PropertyAdapter {
                 false,
                 "inspectable_string_list requires an IInspectable property",
             ),
-            Self::ImplicitOpacityTransition => property(
+            Self::ImplicitOpacityTransition => setter_property(
                 OneOf(&[(BORDER, "OpacityTransition")]),
                 None,
                 "Duration",
                 false,
                 "implicit_opacity_transition requires Border.OpacityTransition",
             ),
-            Self::ImplicitScale => property(
+            Self::ImplicitScale => setter_property(
                 OneOf(&[(BORDER, "Scale")]),
                 None,
                 "F64",
                 true,
                 "implicit_scale requires Border.Scale",
             ),
-            Self::ImplicitScaleTransition => property(
+            Self::ImplicitScaleTransition => setter_property(
                 OneOf(&[(BORDER, "ScaleTransition")]),
                 None,
                 "Duration",
                 false,
                 "implicit_scale_transition requires Border.ScaleTransition",
             ),
-            Self::KeyAccelerators => property(
+            Self::KeyAccelerators => synthetic_property(
                 OneOf(&[
                     (BUTTON, "KeyboardAccelerators"),
                     (GRID, "KeyboardAccelerators"),
@@ -327,7 +343,7 @@ impl PropertyAdapter {
                 false,
                 "path_data requires PathIcon.Data",
             ),
-            Self::DropPolicy => property(
+            Self::DropPolicy => synthetic_property(
                 OneOf(&[(BORDER, "AllowDrop")]),
                 None,
                 "DragDropPolicy",
@@ -348,12 +364,19 @@ impl PropertyAdapter {
                 true,
                 "horizontal_content_alignment requires Button.HorizontalContentAlignment",
             ),
-            Self::PointerCapture => property(
+            Self::PointerCapture => synthetic_property(
                 OneOf(&[(BORDER, "CapturePointerOnPress")]),
                 None,
                 "Bool",
                 true,
                 "pointer_capture requires Border.CapturePointerOnPress",
+            ),
+            Self::PointerFocus => synthetic_property(
+                OneOf(&[(BORDER, "FocusOnPointerRelease")]),
+                None,
+                "Bool",
+                true,
+                "pointer_focus requires Border.FocusOnPointerRelease",
             ),
             Self::RatingValue => property(
                 OneOf(&[(RATING_CONTROL, "Value")]),
@@ -362,21 +385,21 @@ impl PropertyAdapter {
                 true,
                 "rating_value requires RatingControl.Value",
             ),
-            Self::RichEditText => property(
+            Self::RichEditText => synthetic_property(
                 OneOf(&[(RICH_EDIT_BOX, "Document")]),
                 None,
                 "Str",
                 false,
                 "rich_edit_text requires RichEditBox.Document",
             ),
-            Self::RichTextBlocks => property(
+            Self::RichTextBlocks => synthetic_property(
                 OneOf(&[(RICH_TEXT_BLOCK, "Blocks")]),
                 None,
                 "RichText",
                 false,
                 "rich_text_blocks requires RichTextBlock.Blocks",
             ),
-            Self::ResourceOverrides => property(
+            Self::ResourceOverrides => synthetic_property(
                 OneOf(&[(BUTTON, "Resources")]),
                 None,
                 "ResourceOverrides",
@@ -418,6 +441,13 @@ impl PropertyAdapter {
             }
             Self::PointerEvent => {
                 PropertyAdapterKind::EventOnly("pointer_event is an event-only adapter")
+            }
+            Self::KeyEvent => PropertyAdapterKind::EventOnly("key_event is an event-only adapter"),
+            Self::CharacterEvent => {
+                PropertyAdapterKind::EventOnly("character_event is an event-only adapter")
+            }
+            Self::FocusEvent => {
+                PropertyAdapterKind::EventOnly("focus_event is an event-only adapter")
             }
             Self::DragInfo | Self::DropData => {
                 PropertyAdapterKind::EventOnly("drag adapters are event-only")
@@ -478,10 +508,13 @@ pub(crate) enum ValueValidation {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
 pub(crate) enum FeedbackContract {
-    SynchronousExact,
-    SynchronousNormalized,
+    #[serde(rename = "deferred_exact")]
+    DeferredExact,
+    #[serde(rename = "synchronous_exact")]
+    Exact,
+    #[serde(rename = "synchronous_normalized")]
+    Normalized,
 }
 
 #[derive(Deserialize)]
@@ -497,7 +530,9 @@ pub(crate) struct Event {
     #[serde(default)]
     pub(crate) adapter: Option<PropertyAdapter>,
     #[serde(default)]
-    pub(crate) active_property: Option<String>,
+    pub(crate) active_properties: Vec<String>,
+    #[serde(default)]
+    pub(crate) routed: bool,
 }
 
 #[derive(Deserialize)]
@@ -521,7 +556,7 @@ pub(crate) enum SlotTarget {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Selection {
-    pub(crate) slot: String,
+    pub(crate) slots: Vec<String>,
     pub(crate) item: String,
     pub(crate) selected_property: String,
     pub(crate) selected_item_property: String,
@@ -547,6 +582,7 @@ impl ResolvedControl {
 pub(crate) struct ResolvedControl {
     pub(crate) name: String,
     pub(crate) type_name: String,
+    pub(crate) icon_element: bool,
     pub(crate) role: Role,
     pub(crate) placement: ResolvedPlacement,
     pub(crate) lifecycle: Option<Lifecycle>,
@@ -569,6 +605,8 @@ pub(crate) struct ResolvedProperty {
     pub(crate) feedback_contract: Option<FeedbackContract>,
     pub(crate) clear_feedback: Option<bool>,
     pub(crate) adapter: Option<PropertyAdapter>,
+    pub(crate) uses_dependency_property: bool,
+    pub(crate) uses_property_setter: bool,
     pub(crate) nullable_bool: bool,
     pub(crate) observes_feedback: bool,
     pub(crate) enum_variants: Vec<String>,
@@ -593,7 +631,9 @@ pub(crate) struct ResolvedEvent {
     pub(crate) source: EventPayloadSource,
     pub(crate) conversion: EventPayloadConversion,
     pub(crate) subscription: EventSubscription,
-    pub(crate) active_property: Option<String>,
+    pub(crate) handler: Option<(EventHandlerType, EventHandlerType)>,
+    pub(crate) active_properties: Vec<String>,
+    pub(crate) routed: bool,
 }
 
 pub(crate) struct ResolvedSlot {
@@ -604,7 +644,7 @@ pub(crate) struct ResolvedSlot {
 }
 
 pub(crate) struct ResolvedSelection {
-    pub(crate) slot: String,
+    pub(crate) slots: Vec<String>,
     pub(crate) item: String,
     pub(crate) selected_property: String,
     pub(crate) selected_item_property: String,
@@ -638,7 +678,7 @@ impl SlotShape {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum EventPayloadSource {
-    Unit,
+    Unit(EventHandlerType, EventHandlerType),
     SenderProperty { interface: String, property: String },
     EventArgsProperty { interface: String, property: String },
     DragInfo { interface: String },
@@ -648,6 +688,9 @@ pub(crate) enum EventPayloadSource {
     EventArgsTreeNodeContent { interface: String, property: String },
     SenderRichEditText { interface: String, property: String },
     PointerEvent,
+    KeyEvent,
+    CharacterEvent,
+    FocusEvent,
     SenderItemTags { interface: String, property: String },
 }
 
@@ -682,7 +725,13 @@ impl EventPayloadSource {
                 interface,
                 property,
             } => Some((interface, property)),
-            Self::Unit | Self::DragInfo { .. } | Self::DropData { .. } | Self::PointerEvent => None,
+            Self::Unit(..)
+            | Self::DragInfo { .. }
+            | Self::DropData { .. }
+            | Self::PointerEvent
+            | Self::KeyEvent
+            | Self::CharacterEvent
+            | Self::FocusEvent => None,
         }
     }
 
@@ -828,10 +877,26 @@ impl Schema {
                     (None, None) => None,
                 };
                 if property.coerces.is_some()
-                    && property.feedback_contract != Some(FeedbackContract::SynchronousNormalized)
+                    && property.feedback_contract != Some(FeedbackContract::Normalized)
                 {
                     return Err(format!(
                         "{}.{} coercion needs synchronous_normalized feedback",
+                        control.type_name, property.name
+                    ));
+                }
+                if property.adapter == Some(PropertyAdapter::RichEditText)
+                    && property.feedback_contract != Some(FeedbackContract::DeferredExact)
+                {
+                    return Err(format!(
+                        "{}.{} rich_edit_text requires deferred_exact feedback",
+                        control.type_name, property.name
+                    ));
+                }
+                if property.feedback_contract == Some(FeedbackContract::DeferredExact)
+                    && property.adapter != Some(PropertyAdapter::RichEditText)
+                {
+                    return Err(format!(
+                        "{}.{} deferred_exact requires the rich_edit_text adapter",
                         control.type_name, property.name
                     ));
                 }
@@ -868,6 +933,7 @@ impl Schema {
                         format!("get_{}", property.name)
                     }
                     Some(PropertyAdapter::PointerCapture) => "add_PointerPressed".to_string(),
+                    Some(PropertyAdapter::PointerFocus) => "add_PointerReleased".to_string(),
                     Some(PropertyAdapter::DropPolicy) => "put_AllowDrop".to_string(),
                     _ => format!("put_{}", property.name),
                 };
@@ -979,7 +1045,7 @@ impl Schema {
                 };
                 if property.clear_feedback.is_some()
                     && (value != "Bool"
-                        || property.feedback_contract != Some(FeedbackContract::SynchronousExact))
+                        || property.feedback_contract != Some(FeedbackContract::Exact))
                 {
                     return Err(format!(
                         "{}.{} clear_feedback requires a Bool property with synchronous_exact feedback",
@@ -987,7 +1053,7 @@ impl Schema {
                     ));
                 }
                 if value == "Bool"
-                    && property.feedback_contract == Some(FeedbackContract::SynchronousExact)
+                    && property.feedback_contract == Some(FeedbackContract::Exact)
                     && property.clear_feedback.is_none()
                 {
                     return Err(format!(
@@ -1031,6 +1097,13 @@ impl Schema {
                     &value,
                     property.validation,
                 )?;
+                let adapter_capabilities = property.adapter.map_or_else(
+                    || PropertyAdapterCapabilities {
+                        uses_dependency_property: true,
+                        uses_property_setter: true,
+                    },
+                    |adapter| adapter.property_kind().capabilities(),
+                );
 
                 properties.push(ResolvedProperty {
                     field: property
@@ -1045,6 +1118,8 @@ impl Schema {
                     feedback_contract: property.feedback_contract,
                     clear_feedback: property.clear_feedback,
                     adapter: property.adapter,
+                    uses_dependency_property: adapter_capabilities.uses_dependency_property,
+                    uses_property_setter: adapter_capabilities.uses_property_setter,
                     nullable_bool,
                     observes_feedback: property.controlled.is_some(),
                     enum_variants,
@@ -1081,15 +1156,16 @@ impl Schema {
                         control.type_name, event.name
                     ));
                 }
-                if let Some(active_property) = event.active_property.as_deref()
-                    && !properties
+                for active_property in &event.active_properties {
+                    if !properties
                         .iter()
-                        .any(|property| property.field == active_property)
-                {
-                    return Err(format!(
-                        "{}.{} active_property `{active_property}` is not a property field",
-                        control.type_name, event.name
-                    ));
+                        .any(|property| property.field == *active_property)
+                    {
+                        return Err(format!(
+                            "{}.{} active property `{active_property}` is not a property field",
+                            control.type_name, event.name
+                        ));
+                    }
                 }
                 if event.adapter.is_some()
                     && !matches!(
@@ -1097,6 +1173,9 @@ impl Schema {
                         Some(
                             PropertyAdapter::ItemTags
                                 | PropertyAdapter::PointerEvent
+                                | PropertyAdapter::KeyEvent
+                                | PropertyAdapter::CharacterEvent
+                                | PropertyAdapter::FocusEvent
                                 | PropertyAdapter::DragInfo
                                 | PropertyAdapter::DropData
                         )
@@ -1242,6 +1321,20 @@ impl Schema {
                             },
                             ReadValueConversion::Identity,
                         )
+                    } else if event.adapter == Some(PropertyAdapter::FocusEvent) {
+                        if event.property.is_some()
+                            || !matches!(event.name.as_str(), "GotFocus" | "LostFocus")
+                        {
+                            return Err(format!(
+                                "{}.{} has an invalid focus_event contract",
+                                control.type_name, event.name
+                            ));
+                        }
+                        (
+                            "FocusEventInfo".to_string(),
+                            EventPayloadSource::FocusEvent,
+                            ReadValueConversion::Identity,
+                        )
                     } else if event.adapter == Some(PropertyAdapter::PointerEvent) {
                         if event.property.is_some()
                             || !matches!(
@@ -1261,6 +1354,32 @@ impl Schema {
                         (
                             "PointerEventInfo".to_string(),
                             EventPayloadSource::PointerEvent,
+                            ReadValueConversion::Identity,
+                        )
+                    } else if event.adapter == Some(PropertyAdapter::KeyEvent) {
+                        if event.property.is_some()
+                            || !matches!(event.name.as_str(), "PreviewKeyDown" | "KeyUp")
+                        {
+                            return Err(format!(
+                                "{}.{} has an invalid key_event contract",
+                                control.type_name, event.name
+                            ));
+                        }
+                        (
+                            "KeyEventInfo".to_string(),
+                            EventPayloadSource::KeyEvent,
+                            ReadValueConversion::Identity,
+                        )
+                    } else if event.adapter == Some(PropertyAdapter::CharacterEvent) {
+                        if event.property.is_some() || event.name != "CharacterReceived" {
+                            return Err(format!(
+                                "{}.{} has an invalid character_event contract",
+                                control.type_name, event.name
+                            ));
+                        }
+                        (
+                            "CharacterEventInfo".to_string(),
+                            EventPayloadSource::CharacterEvent,
                             ReadValueConversion::Identity,
                         )
                     } else if matches!(
@@ -1487,9 +1606,17 @@ impl Schema {
                             )
                         }
                     } else {
+                        let (sender, args) = metadata
+                            .resolve_event_handler_types(&name, &event.name)
+                            .ok_or_else(|| {
+                                format!(
+                                    "{}.{} has unsupported event handler types",
+                                    control.type_name, event.name
+                                )
+                            })?;
                         (
                             "Unit".to_string(),
-                            EventPayloadSource::Unit,
+                            EventPayloadSource::Unit(sender, args),
                             ReadValueConversion::Identity,
                         )
                     };
@@ -1534,6 +1661,22 @@ impl Schema {
                     payload = format!("Optional{payload}");
                 }
 
+                if event.routed
+                    != matches!(
+                        source,
+                        EventPayloadSource::KeyEvent | EventPayloadSource::CharacterEvent
+                    )
+                {
+                    return Err(format!(
+                        "{}.{} routed must be true exactly when using a key_event or \
+                         character_event adapter",
+                        control.type_name, event.name
+                    ));
+                }
+                let handler = matches!(subscription, EventSubscription::Metadata)
+                    .then(|| metadata.resolve_event_handler_types(&name, &event.name))
+                    .flatten();
+
                 events.push(ResolvedEvent {
                     field: event
                         .field
@@ -1544,7 +1687,9 @@ impl Schema {
                     source,
                     conversion,
                     subscription,
-                    active_property: event.active_property,
+                    handler,
+                    active_properties: event.active_properties,
+                    routed: event.routed,
                 });
             }
 
@@ -1634,7 +1779,7 @@ impl Schema {
             {
                 let feedback = property.feedback.as_deref().unwrap();
                 if coercing_events.contains(feedback)
-                    && property.feedback_contract != Some(FeedbackContract::SynchronousNormalized)
+                    && property.feedback_contract != Some(FeedbackContract::Normalized)
                 {
                     return Err(format!(
                         "{} feedback event {} is coercing and requires synchronous_normalized",
@@ -1718,7 +1863,7 @@ impl Schema {
                         &format!("get_{}", selection.payload_property),
                     );
                     Ok(ResolvedSelection {
-                        slot: selection.slot,
+                        slots: selection.slots,
                         item: selection.item,
                         selected_property: selection.selected_property,
                         selected_item_property: selection.selected_item_property,
@@ -1732,9 +1877,12 @@ impl Schema {
                     })
                 })
                 .transpose()?;
+            let icon_element = metadata
+                .class_derives_from(&control.type_name, "Microsoft.UI.Xaml.Controls.IconElement");
             controls.push(ResolvedControl {
                 name,
                 type_name: control.type_name,
+                icon_element,
                 role,
                 placement,
                 lifecycle: control.lifecycle,
@@ -1747,8 +1895,8 @@ impl Schema {
             });
         }
 
+        resolve_slot_item_controls(&mut controls, metadata)?;
         validate_selections(&controls)?;
-        validate_slot_item_controls(&controls)?;
         Ok(ResolvedSchema { controls })
     }
 }
@@ -1786,15 +1934,42 @@ fn validate_required_property_adapters(
     Ok(())
 }
 
-fn validate_slot_item_controls(controls: &[ResolvedControl]) -> Result<(), String> {
+fn resolve_slot_item_controls(
+    controls: &mut [ResolvedControl],
+    metadata: &MetadataResolver,
+) -> Result<(), String> {
+    let projected = controls
+        .iter()
+        .map(|control| (control.name.clone(), control.type_name.clone()))
+        .collect::<Vec<_>>();
     for control in controls {
-        for slot in &control.slots {
-            for item in &slot.item_controls {
-                if !controls.iter().any(|candidate| candidate.name == *item) {
+        for slot in &mut control.slots {
+            if let Some(item) = slot.shape.collection_item() {
+                if !slot.item_controls.is_empty() {
                     return Err(format!(
-                        "{}.{} names missing item control {}",
+                        "{}.{} typed collection item_controls are inferred from metadata",
+                        control.type_name, slot.name
+                    ));
+                }
+                slot.item_controls = projected
+                    .iter()
+                    .filter(|(_, type_name)| metadata.class_is_assignable_to(type_name, item))
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                if slot.item_controls.is_empty() {
+                    return Err(format!(
+                        "{}.{} collection item {} has no projected controls",
                         control.type_name, slot.name, item
                     ));
+                }
+            } else {
+                for item in &slot.item_controls {
+                    if !projected.iter().any(|(name, _)| name == item) {
+                        return Err(format!(
+                            "{}.{} names missing item control {}",
+                            control.type_name, slot.name, item
+                        ));
+                    }
                 }
             }
         }
@@ -1807,21 +1982,36 @@ fn validate_selections(controls: &[ResolvedControl]) -> Result<(), String> {
         let Some(selection) = control.selection.as_ref() else {
             continue;
         };
-        let slot = control
-            .slots
-            .iter()
-            .find(|slot| slot.name == selection.slot)
-            .ok_or_else(|| {
-                format!(
-                    "{} selection names missing slot {}",
-                    control.type_name, selection.slot
-                )
-            })?;
-        if !matches!(&slot.shape, SlotShape::Collection(_)) {
+        if selection.slots.is_empty() {
             return Err(format!(
-                "{} selection slot {} is not a collection",
-                control.type_name, selection.slot
+                "{} selection must name at least one slot",
+                control.type_name
             ));
+        }
+        let mut unique_slots = HashSet::new();
+        for selection_slot in &selection.slots {
+            if !unique_slots.insert(selection_slot) {
+                return Err(format!(
+                    "{} selection names duplicate slot {}",
+                    control.type_name, selection_slot
+                ));
+            }
+            let slot = control
+                .slots
+                .iter()
+                .find(|slot| slot.name == *selection_slot)
+                .ok_or_else(|| {
+                    format!(
+                        "{} selection names missing slot {}",
+                        control.type_name, selection_slot
+                    )
+                })?;
+            if !matches!(&slot.shape, SlotShape::Collection(_)) {
+                return Err(format!(
+                    "{} selection slot {} is not a collection",
+                    control.type_name, selection_slot
+                ));
+            }
         }
         let event = control
             .events
@@ -2025,840 +2215,4 @@ fn validate_member(
         return Err(format!("{control} has duplicate field {field}"));
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_invalid_selection_contracts() {
-        let source = include_str!("winui.toml");
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let cases = [
-            (
-                "slot = \"MenuItems\"",
-                "slot = \"Missing\"",
-                "selection names missing slot Missing",
-            ),
-            (
-                "slot = \"MenuItems\"",
-                "slot = \"Content\"",
-                "selection slot Content is not a collection",
-            ),
-            (
-                "item = \"NavigationViewItem\"",
-                "item = \"Missing\"",
-                "Missing has no selected property IsSelected",
-            ),
-            (
-                "selected_property = \"IsSelected\"",
-                "selected_property = \"Missing\"",
-                "NavigationViewItem has no selected property Missing",
-            ),
-            (
-                "selected_property = \"IsSelected\"",
-                "selected_property = \"Tag\"",
-                "selection item property NavigationViewItem.Tag is not Bool",
-            ),
-            (
-                "payload_property = \"Tag\"",
-                "payload_property = \"Missing\"",
-                "NavigationViewItem has no payload property Missing",
-            ),
-            (
-                "payload_property = \"Tag\"",
-                "payload_property = \"IsSelected\"",
-                "selection payload property NavigationViewItem.IsSelected is not Str",
-            ),
-            (
-                "adapter = \"inspectable_string\"",
-                "# adapter removed",
-                "selection payload property NavigationViewItem.Tag must use inspectable_string",
-            ),
-            (
-                "selected_item_property = \"SelectedItem\"",
-                "selected_item_property = \"Missing\"",
-                "has no selected-item property Missing",
-            ),
-            (
-                "selected_item_property = \"SelectedItem\"",
-                "selected_item_property = \"IsPaneOpen\"",
-                "event args have no selected-item property IsPaneOpen",
-            ),
-            (
-                "event = \"SelectionChanged\"",
-                "event = \"Missing\"",
-                "selection names missing event Missing",
-            ),
-        ];
-
-        for (from, to, expected) in cases {
-            let changed = if expected
-                == "selection payload property NavigationViewItem.Tag must use inspectable_string"
-            {
-                let marker = "type = \"Microsoft.UI.Xaml.Controls.NavigationViewItem\"";
-                let offset = source.find(marker).unwrap();
-                format!(
-                    "{}{}",
-                    &source[..offset],
-                    source[offset..].replacen(from, to, 1)
-                )
-            } else {
-                source.replacen(from, to, 1)
-            };
-            let error = Schema::parse(&changed)
-                .unwrap()
-                .resolve(&metadata)
-                .err()
-                .unwrap();
-            assert!(error.contains(expected), "{error}");
-        }
-    }
-
-    #[test]
-    fn rejects_image_uri_on_other_properties() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["layout"]
-
-[[control.property]]
-name = "Text"
-adapter = "image_uri"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-        assert!(error.contains("image_uri requires Image.Source or ImageIcon.Source"));
-    }
-
-    #[test]
-    fn rejects_uri_adapter_on_non_uri_properties() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["layout"]
-
-[[control.property]]
-name = "Text"
-adapter = "uri"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-        assert!(error.contains("uri requires a Windows.Foundation.Uri property"));
-    }
-
-    #[test]
-    fn rejects_string_list_adapter_on_non_object_properties() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["layout"]
-
-[[control.property]]
-name = "Text"
-adapter = "inspectable_string_list"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-        assert!(error.contains("inspectable_string_list requires an IInspectable property"));
-    }
-
-    #[test]
-    fn rejects_semantic_value_adapters_on_unrelated_properties() {
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        for (adapter, expected) in [
-            (
-                "clock_identifier",
-                "clock_identifier requires TimePicker.ClockIdentifier",
-            ),
-            (
-                "number_box_value",
-                "number_box_value requires NumberBox.Value",
-            ),
-            ("rating_value", "rating_value requires RatingControl.Value"),
-            (
-                "selection_index",
-                "selection_index requires an I32 SelectedIndex property",
-            ),
-        ] {
-            let source = format!(
-                r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["layout"]
-
-[[control.property]]
-name = "Text"
-adapter = "{adapter}"
-"#
-            );
-            let error = Schema::parse(&source)
-                .unwrap()
-                .resolve(&metadata)
-                .err()
-                .unwrap();
-            assert!(error.contains(expected), "{error}");
-        }
-    }
-
-    #[test]
-    fn requires_native_string_semantic_adapters() {
-        let source = include_str!("winui.toml");
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        for (adapter, expected) in [
-            (
-                "adapter = \"path_data\"",
-                "Microsoft.UI.Xaml.Controls.PathIcon.Data must use the path_data adapter",
-            ),
-            (
-                "adapter = \"clock_identifier\"",
-                "Microsoft.UI.Xaml.Controls.TimePicker.ClockIdentifier must use the clock_identifier adapter",
-            ),
-        ] {
-            let changed = source.replacen(adapter, "# adapter removed", 1);
-            let error = Schema::parse(&changed)
-                .unwrap()
-                .resolve(&metadata)
-                .err()
-                .unwrap();
-            assert!(error.contains(expected), "{error}");
-        }
-    }
-
-    #[test]
-    fn resolves_event_subscription_lifetimes() {
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let schema = Schema::parse(include_str!("winui.toml"))
-            .unwrap()
-            .resolve(&metadata)
-            .unwrap();
-        for (control, event, expected) in [
-            ("Button", "Click", false),
-            ("TextBox", "TextChanged", true),
-            ("ListBox", "SelectionChanged", true),
-            ("ContentDialog", "Closed", true),
-        ] {
-            let control = schema
-                .controls
-                .iter()
-                .find(|candidate| candidate.name == control)
-                .unwrap();
-            let event = control
-                .events
-                .iter()
-                .find(|candidate| candidate.name == event)
-                .unwrap();
-            assert_eq!(control.event_always_active(event), expected);
-        }
-    }
-
-    #[test]
-    fn validates_collection_slot_item_controls() {
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let non_collection = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBox"
-capabilities = ["layout"]
-
-[[control.slot]]
-name = "Header"
-item_controls = ["TextBlock"]
-
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["layout"]
-"#;
-        let error = Schema::parse(non_collection)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-        assert!(error.contains("item_controls requires a collection slot"));
-
-        let source = include_str!("winui.toml").replacen(
-            "item_controls = [\"PivotItem\"]",
-            "item_controls = [\"Missing\"]",
-            1,
-        );
-        let error = Schema::parse(&source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-        assert!(error.contains("names missing item control Missing"));
-    }
-
-    #[test]
-    fn rejects_invalid_resource_styles() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["layout"]
-
-[[control.property]]
-name = "Text"
-adapter = "resource_style"
-variants = [{ name = "Accent", resource = "AccentButtonStyle" }]
-"#;
-        let schema = Schema::parse(source).unwrap();
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = schema.resolve(&metadata).err().unwrap();
-        assert!(error.contains("resource_style requires a Style property and variants"));
-    }
-
-    #[test]
-    fn rejects_duplicate_and_non_object_slots() {
-        let duplicate = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.NavigationView"
-capabilities = ["layout"]
-
-[[control.slot]]
-name = "Content"
-
-[[control.slot]]
-name = "Content"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(duplicate)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-        assert!(error.contains("duplicate member Content"));
-
-        let non_object = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.Slider"
-capabilities = ["layout"]
-
-[[control.slot]]
-name = "Value"
-
-[[control.slot]]
-name = "IsEnabled"
-"#;
-        let error = Schema::parse(non_object)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-        assert!(error.contains("unsupported slot parameter"));
-
-        let non_collection = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.NavigationView"
-capabilities = ["layout"]
-
-[[control.slot]]
-name = "Content"
-collection = true
-
-[[control.slot]]
-name = "Header"
-"#;
-        let error = Schema::parse(non_collection)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-        assert!(
-            error.contains("collection slot must return IVector<IInspectable>"),
-            "{error}"
-        );
-
-        let ambiguous = duplicate.replace(
-            "capabilities = [\"layout\"]",
-            "capabilities = [\"layout\", \"children\"]",
-        );
-        let error = Schema::parse(&ambiguous)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-        assert!(error.contains("ambiguous structural declarations"));
-    }
-
-    #[test]
-    fn rejects_structural_role_not_supported_by_metadata() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.StackPanel"
-capabilities = ["layout", "content"]
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-        assert!(error.contains("not a metadata content property"));
-    }
-
-    #[test]
-    fn rejects_grid_definitions_on_non_grid_control() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.StackPanel"
-capabilities = ["layout", "children", "grid_definitions"]
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-        assert!(error.contains("grid_definitions capability requires the Grid children role"));
-    }
-
-    #[test]
-    fn rejects_window_title_bar_on_other_controls() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["layout", "window_title_bar"]
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-
-        assert!(error.contains("window_title_bar capability requires the WinUI TitleBar control"));
-    }
-
-    #[test]
-    fn retains_event_args_payload_source() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.NumberBox"
-capabilities = ["layout"]
-
-[[control.event]]
-name = "ValueChanged"
-property = "NewValue"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let resolved = Schema::parse(source).unwrap().resolve(&metadata).unwrap();
-        let event = &resolved.controls[0].events[0];
-
-        assert_eq!(event.payload, "F64");
-        assert!(matches!(
-            &event.source,
-            EventPayloadSource::EventArgsProperty {
-                interface,
-                property
-            } if interface.ends_with("INumberBoxValueChangedEventArgs") && property == "NewValue"
-        ));
-        assert_eq!(event.conversion, EventPayloadConversion::Identity);
-    }
-
-    #[test]
-    fn retains_single_field_payload_conversion() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["layout"]
-
-[[control.event]]
-name = "Tapped"
-property = "FontWeight"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let resolved = Schema::parse(source).unwrap().resolve(&metadata).unwrap();
-        let event = &resolved.controls[0].events[0];
-
-        assert_eq!(event.payload, "U16");
-        assert_eq!(
-            event.conversion,
-            EventPayloadConversion::Field("weight".to_string())
-        );
-    }
-
-    #[test]
-    fn rejects_multi_field_event_payload() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["layout"]
-
-[[control.event]]
-name = "SizeChanged"
-property = "NewSize"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-
-        assert!(error.contains("unsupported event property NewSize"));
-    }
-
-    #[test]
-    fn rejects_object_event_payload() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.BreadcrumbBar"
-capabilities = ["layout"]
-
-[[control.event]]
-name = "ItemClicked"
-property = "Item"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-
-        assert!(error.contains("unsupported event property Item"));
-    }
-
-    #[test]
-    fn rejects_missing_controlled_feedback_event() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBox"
-capabilities = ["controlled_text"]
-
-[[control.property]]
-name = "Text"
-controlled = "Missing"
-feedback_contract = "synchronous_exact"
-"#;
-        let schema = Schema::parse(source).unwrap();
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-
-        assert_eq!(
-            schema.resolve(&metadata).err().unwrap(),
-            "Microsoft.UI.Xaml.Controls.TextBox.Text names missing feedback event Missing"
-        );
-    }
-
-    #[test]
-    fn rejects_feedback_event_shared_by_controlled_properties() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBox"
-capabilities = ["controlled_text"]
-
-[[control.property]]
-name = "Text"
-controlled = "TextChanged"
-feedback_contract = "synchronous_exact"
-
-[[control.property]]
-name = "SelectedText"
-controlled = "TextChanged"
-feedback_contract = "synchronous_exact"
-
-[[control.event]]
-name = "TextChanged"
-property = "Text"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-
-        assert_eq!(
-            error,
-            "Microsoft.UI.Xaml.Controls.TextBox assigns feedback event TextChanged to multiple \
-             controlled properties"
-        );
-    }
-
-    #[test]
-    fn rejects_missing_controlled_feedback_contract() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBox"
-capabilities = ["controlled_text"]
-
-[[control.property]]
-name = "Text"
-controlled = "TextChanged"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-
-        assert!(error.contains("needs a feedback contract"));
-    }
-
-    #[test]
-    fn rejects_unknown_feedback_contract() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBox"
-capabilities = ["controlled_text"]
-
-[[control.property]]
-name = "Text"
-controlled = "TextChanged"
-feedback_contract = "deferred_coalesced"
-"#;
-        let error = Schema::parse(source).err().unwrap();
-
-        assert!(error.contains("unknown variant `deferred_coalesced`"));
-    }
-
-    #[test]
-    fn rejects_exact_coercion_feedback() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.NumberBox"
-capabilities = ["layout"]
-
-[[control.property]]
-name = "Minimum"
-coerces = "ValueChanged"
-feedback_contract = "synchronous_exact"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-
-        assert!(error.contains("coercion needs synchronous_normalized feedback"));
-    }
-
-    #[test]
-    fn rejects_exact_observer_for_coercing_event() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.NumberBox"
-capabilities = ["layout"]
-
-[[control.property]]
-name = "Minimum"
-coerces = "ValueChanged"
-feedback_contract = "synchronous_normalized"
-
-[[control.property]]
-name = "Value"
-controlled = "ValueChanged"
-feedback_contract = "synchronous_exact"
-
-[[control.event]]
-name = "ValueChanged"
-property = "NewValue"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-
-        assert!(error.contains(
-            "feedback event ValueChanged is coercing and requires synchronous_normalized"
-        ));
-    }
-
-    #[test]
-    fn rejects_observation_of_missing_property() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.NavigationView"
-capabilities = ["layout"]
-
-[[control.event]]
-name = "IsPaneOpenChanged"
-observe = "IsPaneOpen"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-
-        assert!(
-            error.contains("observes missing property IsPaneOpen"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn rejects_ambiguous_event_payload_source() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.NavigationView"
-capabilities = ["layout"]
-
-[[control.property]]
-name = "IsPaneOpen"
-
-[[control.event]]
-name = "IsPaneOpenChanged"
-property = "IsPaneOpen"
-observe = "IsPaneOpen"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-
-        assert!(
-            error.contains("cannot set both property and observe"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn rejects_controlled_feedback_observing_a_different_property() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.NavigationView"
-capabilities = ["layout"]
-
-[[control.property]]
-name = "IsPaneOpen"
-controlled = "IsPaneOpenChanged"
-feedback_contract = "synchronous_exact"
-clear_feedback = false
-
-[[control.property]]
-name = "IsSettingsVisible"
-
-[[control.event]]
-name = "IsPaneOpenChanged"
-observe = "IsSettingsVisible"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-
-        assert!(
-            error.contains("feedback event IsPaneOpenChanged observes a different property"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn rejects_controlled_bool_without_clear_feedback() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.ToggleSwitch"
-capabilities = ["layout"]
-
-[[control.property]]
-name = "IsOn"
-controlled = "Toggled"
-feedback_contract = "synchronous_exact"
-
-[[control.event]]
-name = "Toggled"
-property = "IsOn"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-        assert!(
-            error.contains("controlled Bool requires an explicit clear_feedback value"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn rejects_unknown_capability() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["typo"]
-"#;
-
-        assert!(Schema::parse(source).is_err());
-    }
-
-    #[test]
-    fn rejects_font_weight_adapter_on_other_properties() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.TextBlock"
-capabilities = ["layout"]
-
-[[control.property]]
-name = "Text"
-adapter = "font_weight"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let error = Schema::parse(source)
-            .unwrap()
-            .resolve(&metadata)
-            .err()
-            .unwrap();
-
-        assert!(
-            error.contains("TextBlock.Text font_weight requires TextBlock.FontWeight"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn resolves_native_placement_contracts() {
-        let source = include_str!("winui.toml");
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let resolved = Schema::parse(source).unwrap().resolve(&metadata).unwrap();
-        let placement = |name| {
-            resolved
-                .controls
-                .iter()
-                .find(|control| control.name == name)
-                .unwrap()
-                .placement
-        };
-
-        assert_eq!(placement("Button"), ResolvedPlacement::Visual);
-        assert_eq!(placement("TitleBar"), ResolvedPlacement::WindowLifetime);
-        assert_eq!(placement("ToolTip"), ResolvedPlacement::TooltipAttachment);
-        assert_eq!(placement("ContentDialog"), ResolvedPlacement::Declaration);
-    }
-
-    #[test]
-    fn rejects_non_visual_controls_without_a_placement_contract() {
-        let source = include_str!("winui.toml").replace("placement = \"tooltip_attachment\"", "");
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-
-        assert_eq!(
-            Schema::parse(&source).unwrap().resolve(&metadata).err(),
-            Some(
-                "Microsoft.UI.Xaml.Controls.ToolTip has no valid native placement contract"
-                    .to_string()
-            )
-        );
-    }
 }

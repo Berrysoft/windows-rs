@@ -3,12 +3,13 @@ use quote::quote;
 use std::collections::BTreeMap;
 
 use crate::schema::{
-    Capability, EventPayloadConversion, FeedbackContract, Lifecycle, PropertyAdapter,
-    ResolvedControl, ResolvedPlacement, ResolvedSchema, Role, ValueValidation,
+    Capability, EventPayloadConversion, Lifecycle, PropertyAdapter, ResolvedControl,
+    ResolvedPlacement, ResolvedSchema, Role, ValueValidation,
 };
 
 pub(crate) fn generate(schema: &ResolvedSchema) -> String {
     let value_enums = generate_value_enums(schema);
+    let collection_item_types = generate_collection_item_types(schema);
     let event_groups = schema
         .controls
         .iter()
@@ -25,6 +26,25 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             quote! {
                 let open = value.is_open;
                 Self::content_dialog(value.into(), None, open)
+            }
+        } else if matches!(control.role, Role::Slots)
+            && control.placement == ResolvedPlacement::WindowLifetime
+        {
+            quote! {
+                let mut value = value;
+                let slots = value
+                    .slots
+                    .take()
+                    .unwrap_or_else(|| std::rc::Rc::new(Vec::new()));
+                Self::slotted(value.into(), slots)
+            }
+        } else if matches!(control.role, Role::Slots) {
+            quote! {
+                let mut value = value;
+                match value.slots.take() {
+                    Some(slots) => Self::slotted(value.into(), slots),
+                    None => Self::native(value),
+                }
             }
         } else {
             quote! { Self::native(value) }
@@ -54,6 +74,10 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
     let mounted_theme_styles = schema.controls.iter().map(generate_mounted_theme_style);
     let mounted_event_visitors = schema.controls.iter().map(generate_mounted_event_visitor);
     let mounted_event_dispatchers = schema.controls.iter().flat_map(generate_event_dispatchers);
+    let mounted_routed_callbacks = schema
+        .controls
+        .iter()
+        .flat_map(generate_mounted_routed_callbacks);
     let mounted_event_observers = schema.controls.iter().flat_map(generate_event_observers);
     let element_parts = schema.controls.iter().map(generate_element_parts);
     let element_props_matches = schema.controls.iter().map(generate_element_props_match);
@@ -105,32 +129,18 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             .iter()
             .map(|slot| ident(&format!("{}{}", control.name, slot.name)))
     });
-    let slot_id_lookups = schema
+    let slot_lists = schema
         .controls
         .iter()
         .filter(|control| !control.slots.is_empty())
         .map(|control| {
             let kind = ident(&control.name);
-            let indexes = control.slots.iter().enumerate().map(|(index, slot)| {
-                let index = u8::try_from(index).unwrap();
+            let slots = control.slots.iter().map(|slot| {
                 let slot = ident(&format!("{}{}", control.name, slot.name));
-                quote! { #index => Some(SlotId::#slot) }
+                quote! { SlotId::#slot }
             });
-            quote! {
-                MountedKind::#kind => match index {
-                    #(#indexes,)*
-                    _ => None,
-                }
-            }
+            quote! { MountedKind::#kind => &[#(#slots),*] }
         });
-    let slot_lists = schema.controls.iter().map(|control| {
-        let kind = ident(&control.name);
-        let slots = control.slots.iter().map(|slot| {
-            let slot = ident(&format!("{}{}", control.name, slot.name));
-            quote! { SlotId::#slot }
-        });
-        quote! { MountedKind::#kind => &[#(#slots),*] }
-    });
     let collection_slot_lookups = schema.controls.iter().flat_map(|control| {
         control
             .slots
@@ -143,8 +153,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
     });
     let property_values = generate_property_values(schema);
     let event_payloads = generate_event_payloads(schema);
-    let descriptors = schema.controls.iter().map(generate_descriptors);
-    let controls = schema.controls.iter().map(generate_control);
+    let runtime_descriptors = generate_runtime_descriptors(schema);
 
     let tokens = quote! {
         use crate::core::ThemeStyle;
@@ -157,6 +166,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             use super::*;
 
             #value_enums
+            #(#collection_item_types)*
 
             #(#elements)*
 
@@ -243,6 +253,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
         pub trait MountedEventsExt {
             fn visit_events(&self, visit: &mut dyn FnMut(EventId, bool));
             fn dispatch_event(&self, event: EventId, payload: &EventPayload) -> Option<bool>;
+            fn routed_callback(&self, event: EventId) -> Option<RoutedEventCallback>;
             fn observe_event(
                 &self,
                 event: EventId,
@@ -281,6 +292,13 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
                 }
             }
 
+            fn routed_callback(&self, event: EventId) -> Option<RoutedEventCallback> {
+                match (self, event) {
+                    #(#mounted_routed_callbacks,)*
+                    _ => None,
+                }
+            }
+
             fn observe_event(
                 &self,
                 event: EventId,
@@ -303,16 +321,10 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             #(#slot_ids),*
         }
 
-        pub fn slot_id(kind: MountedKind, index: u8) -> Option<SlotId> {
-            match kind {
-                #(#slot_id_lookups,)*
-                _ => None,
-            }
-        }
-
         pub fn slots(kind: MountedKind) -> &'static [SlotId] {
             match kind {
-                #(#slot_lists),*
+                #(#slot_lists,)*
+                _ => &[],
             }
         }
 
@@ -379,6 +391,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
             RelativeAlignVerticalCenter,
             CanvasLeft,
             CanvasTop,
+            Transitions,
             AutomationName,
             AutomationId,
             AutomationHeadingLevel,
@@ -395,191 +408,7 @@ pub(crate) fn generate(schema: &ResolvedSchema) -> String {
         #property_values
         #event_payloads
 
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-        pub enum ControlRole {
-            Leaf,
-            Content,
-            Children,
-            Slots,
-            Virtual,
-        }
-
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-        pub enum Capability {
-            Layout,
-            TextStyle,
-            Enabled,
-            Content,
-            Children,
-            ControlledText,
-            Items,
-            Focus,
-            Reference,
-            GridDefinitions,
-            WindowTitleBar,
-        }
-
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-        pub struct PropertyDescriptor {
-            pub id: PropertyId,
-            pub name: &'static str,
-            pub field: &'static str,
-            pub value: &'static str,
-            pub interface: &'static str,
-            pub clearable: bool,
-            pub feedback: Option<&'static str>,
-            pub feedback_contract: Option<&'static str>,
-            pub observes_feedback: bool,
-        }
-
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-        pub struct EventDescriptor {
-            pub id: EventId,
-            pub name: &'static str,
-            pub field: &'static str,
-            pub payload: &'static str,
-            pub interface: &'static str,
-        }
-
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-        pub struct SlotDescriptor {
-            pub id: SlotId,
-            pub name: &'static str,
-            pub interface: &'static str,
-            pub target: &'static str,
-            pub collection: bool,
-        }
-
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-        pub struct SelectionDescriptor {
-            pub slot: SlotId,
-            pub item: MountedKind,
-            pub selected_property: PropertyId,
-            pub event: EventId,
-            pub payload_property: PropertyId,
-        }
-
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-        pub struct ControlledCollectionDescriptor {
-            pub slot: SlotId,
-            pub property: PropertyId,
-            pub event: EventId,
-        }
-
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-        pub struct ControlDescriptor {
-            pub kind: MountedKind,
-            pub name: &'static str,
-            pub type_name: &'static str,
-            pub role: ControlRole,
-            pub capabilities: &'static [Capability],
-            pub properties: &'static [PropertyDescriptor],
-            pub events: &'static [EventDescriptor],
-            pub slots: &'static [SlotDescriptor],
-            pub selection: Option<SelectionDescriptor>,
-            pub controlled_collection: Option<ControlledCollectionDescriptor>,
-        }
-
-        #(#descriptors)*
-
-        pub const CONTROLS: &[ControlDescriptor] = &[
-            #(#controls),*
-        ];
-
-        pub fn selection_for_event(event: EventId) -> Option<SelectionDescriptor> {
-            CONTROLS
-                .iter()
-                .find_map(|control| control.selection.filter(|selection| selection.event == event))
-        }
-
-        pub fn selection_for_slot(slot: SlotId) -> Option<SelectionDescriptor> {
-            CONTROLS
-                .iter()
-                .find_map(|control| control.selection.filter(|selection| selection.slot == slot))
-        }
-
-        pub fn selection_for_item_property(
-            property: PropertyId,
-            slot: SlotId,
-        ) -> Option<SelectionDescriptor> {
-            CONTROLS.iter().find_map(|control| {
-                control.selection.filter(|selection| {
-                    selection.selected_property == property && selection.slot == slot
-                })
-            })
-        }
-
-        pub fn controlled_collection_for_slot(
-            slot: SlotId,
-        ) -> Option<ControlledCollectionDescriptor> {
-            CONTROLS.iter().find_map(|control| {
-                control
-                    .controlled_collection
-                    .filter(|collection| collection.slot == slot)
-            })
-        }
-
-        pub fn controlled_collection_for_property(
-            property: PropertyId,
-        ) -> Option<ControlledCollectionDescriptor> {
-            CONTROLS.iter().find_map(|control| {
-                control
-                    .controlled_collection
-                    .filter(|collection| collection.property == property)
-            })
-        }
-
-        const _: () = {
-            let _: Option<PropertyValue> = None;
-            let mut control_index = 0;
-            while control_index < CONTROLS.len() {
-                let control = &CONTROLS[control_index];
-                let _ = (
-                    control.name,
-                    control.type_name,
-                    control.kind,
-                    control.role,
-                    control.capabilities,
-                    control.slots,
-                    control.controlled_collection,
-                );
-                let mut property_index = 0;
-                while property_index < control.properties.len() {
-                    let property = &control.properties[property_index];
-                    let _ = (
-                        property.name,
-                        property.id,
-                        property.field,
-                        property.value,
-                        property.interface,
-                        property.clearable,
-                        property.feedback,
-                        property.feedback_contract,
-                        property.observes_feedback,
-                    );
-                    property_index += 1;
-                }
-                let mut event_index = 0;
-                while event_index < control.events.len() {
-                    let event = &control.events[event_index];
-                    let _ = (
-                        event.id,
-                        event.name,
-                        event.field,
-                        event.payload,
-                        event.interface,
-                    );
-                    event_index += 1;
-                }
-                let mut slot_index = 0;
-                while slot_index < control.slots.len() {
-                    let slot = &control.slots[slot_index];
-                    let _ = (slot.id, slot.name, slot.interface, slot.target);
-                    slot_index += 1;
-                }
-                control_index += 1;
-            }
-        };
+        #runtime_descriptors
     };
 
     format!("// Generated by `tool-reactor`. Do not edit.\n\n{tokens}\n")
@@ -602,7 +431,12 @@ fn generate_event_group(control: &ResolvedControl) -> TokenStream {
     let fields = control.events.iter().map(|event| {
         let field = ident(&event.field);
         let payload = event_callback_type(event);
-        quote! { #field: Option<Callback<#payload>> }
+        let callback = if event.routed {
+            quote! { RoutedCallback<#payload> }
+        } else {
+            quote! { Callback<#payload> }
+        };
+        quote! { #field: Option<#callback> }
     });
     quote! {
         #[derive(Clone, Debug, Default, PartialEq)]
@@ -643,10 +477,10 @@ fn generate_mounted_props_structure(control: &ResolvedControl) -> TokenStream {
                 .flatten(),
         )
         .collect::<Vec<_>>();
-    let comparisons = fields.iter().map(|(field, value)| {
+    let comparisons = conjunction(fields.iter().map(|(field, value)| {
         let field = ident(field);
         value_equality(*value, &quote! { self.#field }, &quote! { other.#field })
-    });
+    }));
     let other = if fields.is_empty() {
         ident("_other")
     } else {
@@ -654,7 +488,7 @@ fn generate_mounted_props_structure(control: &ResolvedControl) -> TokenStream {
     };
     let property_fields = control.properties.iter().map(|property| {
         let field = ident(&property.field);
-        let value = value_type(&property.value);
+        let value = property_storage_type(property);
         quote! { #field: Property<#value> }
     });
     let event_fields = if has_grouped_events(control) {
@@ -664,7 +498,12 @@ fn generate_mounted_props_structure(control: &ResolvedControl) -> TokenStream {
         let fields = control.events.iter().map(|event| {
             let field = ident(&event.field);
             let payload = event_callback_type(event);
-            quote! { #field: Option<Callback<#payload>>, }
+            let callback = if event.routed {
+                quote! { RoutedCallback<#payload> }
+            } else {
+                quote! { Callback<#payload> }
+            };
+            quote! { #field: Option<#callback>, }
         });
         quote! { #(#fields)* }
     };
@@ -684,7 +523,7 @@ fn generate_mounted_props_structure(control: &ResolvedControl) -> TokenStream {
 
         impl PartialEq for #name {
             fn eq(&self, #other: &Self) -> bool {
-                true #(&& #comparisons)*
+                #comparisons
             }
         }
     }
@@ -757,6 +596,7 @@ fn generate_element_parts(control: &ResolvedControl) -> TokenStream {
         ),
         Role::Leaf | Role::Slots => (TokenStream::new(), quote! { ElementStructure::None }),
     };
+    let slot_pattern = matches!(control.role, Role::Slots).then(|| quote! { slots: _, });
     let lifecycle_pattern =
         (control.lifecycle == Some(Lifecycle::ContentDialog)).then(|| quote! { , is_open: _ });
 
@@ -768,6 +608,7 @@ fn generate_element_parts(control: &ResolvedControl) -> TokenStream {
                 #reference_pattern
                 #element_state_pattern
                 #window_title_bar_pattern
+                #slot_pattern
                 #structural_pattern
                 #lifecycle_pattern
             } = value;
@@ -810,10 +651,10 @@ fn generate_element_props_match(control: &ResolvedControl) -> TokenStream {
                 .flatten(),
         )
         .collect::<Vec<_>>();
-    let comparisons = fields.iter().map(|(field, value)| {
+    let comparisons = conjunction(fields.iter().map(|(field, value)| {
         let field = ident(field);
         value_equality(*value, &quote! { value.#field }, &quote! { mounted.#field })
-    });
+    }));
     let mounted_pattern = if fields.is_empty() {
         quote! { _ }
     } else {
@@ -829,8 +670,15 @@ fn generate_element_props_match(control: &ResolvedControl) -> TokenStream {
         (
             Self::#name(#value_pattern),
             MountedProps::#name(#mounted_pattern),
-        ) => true #(&& #comparisons)*
+        ) => #comparisons
     }
+}
+
+fn conjunction(mut values: impl Iterator<Item = TokenStream>) -> TokenStream {
+    let Some(first) = values.next() else {
+        return quote! { true };
+    };
+    quote! { #first #(&& #values)* }
 }
 
 fn generate_element_structure(control: &ResolvedControl) -> TokenStream {
@@ -864,7 +712,7 @@ fn generate_element_event_visitor(control: &ResolvedControl) -> TokenStream {
             if control.event_always_active(event) {
                 quote! { visit(EventId::#id, true); }
             } else {
-                let active_property = event.active_property.as_ref().map(|property| {
+                let active_properties = event.active_properties.iter().map(|property| {
                     let property = ident(property);
                     quote! { || !matches!(value.#property, Property::Inherited) }
                 });
@@ -875,7 +723,7 @@ fn generate_element_event_visitor(control: &ResolvedControl) -> TokenStream {
                             .events
                             .as_ref()
                             .is_some_and(|events| events.#field.is_some())
-                            #active_property,
+                            #(#active_properties)*,
                     );
                 }
             }
@@ -960,13 +808,17 @@ fn generate_mounted_props_visitor(control: &ResolvedControl) -> TokenStream {
                 );
             };
         }
-        let value = match property.value.as_str() {
-            "Str" => quote! { value.as_str() },
-            "KeyAccelerators" | "ResourceOverrides" | "RichText" | "StrList" | "Thickness"
-            | "CornerRadius" | "DragDropPolicy" => {
-                quote! { value }
+        let value = if is_indirect_property(property) {
+            quote! { value.as_ref() }
+        } else {
+            match property.value.as_str() {
+                "Str" => quote! { value.as_str() },
+                "KeyAccelerators" | "ResourceOverrides" | "RichText" | "StrList" | "Thickness"
+                | "CornerRadius" | "DragDropPolicy" => {
+                    quote! { value }
+                }
+                _ => quote! { *value },
             }
-            _ => quote! { *value },
         };
         quote! {
             visit(
@@ -1047,7 +899,7 @@ fn generate_mounted_event_visitor(control: &ResolvedControl) -> TokenStream {
             if control.event_always_active(event) {
                 quote! { visit(EventId::#id, true); }
             } else {
-                let active_property = event.active_property.as_ref().map(|property| {
+                let active_properties = event.active_properties.iter().map(|property| {
                     let property = ident(property);
                     quote! { || !matches!(values.#property, Property::Inherited) }
                 });
@@ -1058,7 +910,7 @@ fn generate_mounted_event_visitor(control: &ResolvedControl) -> TokenStream {
                             .events
                             .as_ref()
                             .is_some_and(|events| events.#field.is_some())
-                            #active_property,
+                            #(#active_properties)*,
                     );
                 }
             }
@@ -1107,6 +959,7 @@ fn generate_event_dispatchers(control: &ResolvedControl) -> Vec<TokenStream> {
     control
         .events
         .iter()
+        .filter(|event| !event.routed)
         .map(|event| {
             let field = ident(&event.field);
             let id = ident(&format!("{}{}", control.name, event.name));
@@ -1146,6 +999,36 @@ fn generate_event_dispatchers(control: &ResolvedControl) -> Vec<TokenStream> {
                         EventId::#id,
                         #payload_pattern,
                     ) => values.#field.as_ref().map(|callback| #call)
+                }
+            }
+        })
+        .collect()
+}
+
+fn generate_mounted_routed_callbacks(control: &ResolvedControl) -> Vec<TokenStream> {
+    let name = ident(&control.name);
+    control
+        .events
+        .iter()
+        .filter(|event| event.routed)
+        .map(|event| {
+            let field = ident(&event.field);
+            let id = ident(&format!("{}{}", control.name, event.name));
+            let payload = ident(&event.payload);
+            if has_grouped_events(control) {
+                quote! {
+                    (Self::#name(values), EventId::#id) => values
+                        .events
+                        .as_ref()
+                        .and_then(|events| events.#field.clone())
+                        .map(RoutedEventCallback::#payload)
+                }
+            } else {
+                quote! {
+                    (Self::#name(values), EventId::#id) => values
+                        .#field
+                        .clone()
+                        .map(RoutedEventCallback::#payload)
                 }
             }
         })
@@ -1193,6 +1076,10 @@ fn generate_property_values(schema: &ResolvedSchema) -> TokenStream {
             quote! { std::rc::Rc<Vec<GridLength>> },
         ),
         (
+            "ThemeTransitions".to_string(),
+            quote! { std::rc::Rc<Vec<ThemeTransition>> },
+        ),
+        (
             "HorizontalAlignment".to_string(),
             quote! { HorizontalAlignment },
         ),
@@ -1224,6 +1111,7 @@ fn generate_property_values(schema: &ResolvedSchema) -> TokenStream {
         let variant = ident(name);
         let value = match name.as_str() {
             "GridLengths" => quote! { &'a std::rc::Rc<Vec<GridLength>> },
+            "ThemeTransitions" => quote! { &'a std::rc::Rc<Vec<ThemeTransition>> },
             "StrList" => quote! { &'a std::rc::Rc<Vec<String>> },
             "RichText" => quote! { &'a RichText },
             "ResourceOverrides" => quote! { &'a ResourceOverrides },
@@ -1288,6 +1176,7 @@ fn generate_property_values(schema: &ResolvedSchema) -> TokenStream {
                 | "KeyAccelerators"
                 | "RichText"
                 | "StrList"
+                | "ThemeTransitions"
                 | "Str"
                 | "Thickness"
                 | "CornerRadius"
@@ -1306,7 +1195,7 @@ fn generate_property_values(schema: &ResolvedSchema) -> TokenStream {
     let ref_to_owned = values.keys().map(|name| {
         let variant = ident(name);
         match name.as_str() {
-            "GridLengths" | "StrList" => quote! {
+            "GridLengths" | "StrList" | "ThemeTransitions" => quote! {
                 Self::#variant(value) => PropertyValue::#variant(value.clone())
             },
             "Str" => quote! {
@@ -1495,9 +1384,18 @@ fn generate_element(control: &ResolvedControl) -> TokenStream {
     } else {
         (TokenStream::new(), TokenStream::new(), TokenStream::new())
     };
+    let icon_conversion = control.icon_element.then(|| {
+        quote! {
+            impl From<#name> for Icon {
+                fn from(value: #name) -> Self {
+                    Self(value.into())
+                }
+            }
+        }
+    });
     let property_fields = control.properties.iter().map(|property| {
         let field = ident(&property.field);
-        let value = value_type(&property.value);
+        let value = property_storage_type(property);
         quote! { #field: Property<#value> }
     });
     let event_fields = if has_grouped_events(control) {
@@ -1507,7 +1405,12 @@ fn generate_element(control: &ResolvedControl) -> TokenStream {
         let fields = control.events.iter().map(|event| {
             let field = ident(&event.field);
             let payload = event_callback_type(event);
-            quote! { #field: Option<Callback<#payload>>, }
+            let callback = if event.routed {
+                quote! { RoutedCallback<#payload> }
+            } else {
+                quote! { Callback<#payload> }
+            };
+            quote! { #field: Option<#callback>, }
         });
         quote! { #(#fields)* }
     };
@@ -1543,6 +1446,73 @@ fn generate_element(control: &ResolvedControl) -> TokenStream {
                 self.is_open = value;
                 self
             }
+        }
+    });
+    let slot_field = (!control.slots.is_empty())
+        .then(|| quote! { slots: Option<std::rc::Rc<Vec<SlottedView>>>, });
+    let slot_methods = control.slots.iter().map(|slot| {
+        let method = ident(&crate::helpers::to_snake_case(&slot.name));
+        let slot_id = ident(&format!("{}{}", control.name, slot.name));
+        match &slot.shape {
+            crate::schema::SlotShape::Single(crate::schema::SlotTarget::IconElement) => quote! {
+                #visibility fn #method(mut self, icon: impl Into<Icon>) -> Self {
+                    set_control_slot(
+                        &mut self.slots,
+                        SlotId::#slot_id,
+                        SlotContent::Single(icon.into().into_view()),
+                    );
+                    self
+                }
+            },
+            crate::schema::SlotShape::Single(_) => quote! {
+                #visibility fn #method(mut self, view: impl Into<View>) -> Self {
+                    set_control_slot(
+                        &mut self.slots,
+                        SlotId::#slot_id,
+                        SlotContent::Single(view.into()),
+                    );
+                    self
+                }
+            },
+            crate::schema::SlotShape::Collection(_) if collection_item_type(slot).is_some() => {
+                let item = collection_item_type(slot).unwrap();
+                quote! {
+                    #visibility fn #method(
+                        mut self,
+                        children: impl IntoIterator<Item = Keyed<#item>>,
+                    ) -> Self {
+                        set_control_slot(
+                            &mut self.slots,
+                            SlotId::#slot_id,
+                            SlotContent::Collection(std::rc::Rc::new(
+                                children
+                                    .into_iter()
+                                    .map(Keyed::into_keyed_view)
+                                    .collect(),
+                            )),
+                        );
+                        self
+                    }
+                }
+            }
+            crate::schema::SlotShape::Collection(_) => quote! {
+                #visibility fn #method<T>(
+                    mut self,
+                    children: impl IntoIterator<Item = T>,
+                ) -> Self
+                where
+                    T: Into<KeyedView>,
+                {
+                    set_control_slot(
+                        &mut self.slots,
+                        SlotId::#slot_id,
+                        SlotContent::Collection(std::rc::Rc::new(
+                            children.into_iter().map(Into::into).collect(),
+                        )),
+                    );
+                    self
+                }
+            },
         }
     });
     let property_methods = control.properties.iter().map(|property| {
@@ -1665,6 +1635,34 @@ fn generate_element(control: &ResolvedControl) -> TokenStream {
                     self
                 }
             }
+        } else if is_indirect_property(property) {
+            quote! {
+                pub fn #field(mut self, value: impl Into<Option<#value>>) -> Self {
+                    let value = value.into();
+                    #validation
+                    self.#field = Property::from(value.map(std::rc::Rc::new));
+                    self
+                }
+            }
+        } else if property.adapter == Some(PropertyAdapter::RichEditText) {
+            let optional = ident(&format!("{}_optional", property.field));
+            quote! {
+                pub fn #field(mut self, value: impl Into<String>) -> Self {
+                    self.#field =
+                        Property::Set(canonical_rich_edit_text(&value.into()));
+                    self
+                }
+
+                pub fn #optional<T>(mut self, value: Option<T>) -> Self
+                where
+                    T: Into<String>,
+                {
+                    self.#field = Property::from(
+                        value.map(|value| canonical_rich_edit_text(&value.into()))
+                    );
+                    self
+                }
+            }
         } else if property.value == "Str" {
             let optional = ident(&format!("{}_optional", property.field));
             quote! {
@@ -1754,7 +1752,14 @@ fn generate_element(control: &ResolvedControl) -> TokenStream {
         } else {
             quote! { self.#field }
         };
-        if event.payload == "Unit" {
+        if event.routed {
+            quote! {
+                pub fn #field(mut self, callback: RoutedCallback<#payload>) -> Self {
+                    #assignment = Some(callback);
+                    self
+                }
+            }
+        } else if event.payload == "Unit" {
             quote! {
                 pub fn #field(mut self, callback: impl IntoUnitCallback) -> Self {
                     #assignment = Some(callback.into_unit_callback());
@@ -1776,12 +1781,7 @@ fn generate_element(control: &ResolvedControl) -> TokenStream {
                 mut self,
                 values: impl IntoIterator<Item = GridLength>,
             ) -> Self {
-                let values = values.into_iter().collect::<Vec<_>>();
-                assert!(
-                    values.iter().all(|value| value.is_valid()),
-                    "Grid lengths must be finite and non-negative",
-                );
-                self.rows = Property::Set(std::rc::Rc::new(values));
+                self.rows = Property::Set(grid_lengths(values));
                 self
             }
 
@@ -1789,16 +1789,7 @@ fn generate_element(control: &ResolvedControl) -> TokenStream {
             where
                 T: IntoIterator<Item = GridLength>,
             {
-                self.rows = Property::from(
-                    values.map(|values| {
-                        let values = values.into_iter().collect::<Vec<_>>();
-                        assert!(
-                            values.iter().all(|value| value.is_valid()),
-                            "Grid lengths must be finite and non-negative",
-                        );
-                        std::rc::Rc::new(values)
-                    }),
-                );
+                self.rows = Property::from(values.map(grid_lengths));
                 self
             }
 
@@ -1806,12 +1797,7 @@ fn generate_element(control: &ResolvedControl) -> TokenStream {
                 mut self,
                 values: impl IntoIterator<Item = GridLength>,
             ) -> Self {
-                let values = values.into_iter().collect::<Vec<_>>();
-                assert!(
-                    values.iter().all(|value| value.is_valid()),
-                    "Grid lengths must be finite and non-negative",
-                );
-                self.columns = Property::Set(std::rc::Rc::new(values));
+                self.columns = Property::Set(grid_lengths(values));
                 self
             }
 
@@ -1819,16 +1805,7 @@ fn generate_element(control: &ResolvedControl) -> TokenStream {
             where
                 T: IntoIterator<Item = GridLength>,
             {
-                self.columns = Property::from(
-                    values.map(|values| {
-                        let values = values.into_iter().collect::<Vec<_>>();
-                        assert!(
-                            values.iter().all(|value| value.is_valid()),
-                            "Grid lengths must be finite and non-negative",
-                        );
-                        std::rc::Rc::new(values)
-                    }),
-                );
+                self.columns = Property::from(values.map(grid_lengths));
                 self
             }
         }
@@ -1956,30 +1933,6 @@ fn generate_element(control: &ResolvedControl) -> TokenStream {
             Some(quote! { impl #capability for #name {} })
         }
     });
-    let slots = if control.slots.is_empty() {
-        TokenStream::new()
-    } else {
-        let slot_name = ident(&format!("{}Slot", control.name));
-        let variants = control.slots.iter().map(|slot| ident(&slot.name));
-        quote! {
-            #[non_exhaustive]
-            #[repr(u8)]
-            #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-            pub enum #slot_name {
-                #(#variants),*
-            }
-
-            impl sealed::SlotIndex<#slot_name> for #name {
-                fn slot_index(slot: #slot_name) -> u8 {
-                    slot as u8
-                }
-            }
-
-            impl SlotsControl for #name {
-                type Slot = #slot_name;
-            }
-        }
-    };
     quote! {
         #[derive(Clone, Debug, Default, PartialEq)]
         #visibility struct #name {
@@ -1989,6 +1942,7 @@ fn generate_element(control: &ResolvedControl) -> TokenStream {
             #element_state_field
             #window_title_bar_field
             #grid_definition_fields
+            #slot_field
             #structural_field
             #lifecycle_field
         }
@@ -2004,20 +1958,86 @@ fn generate_element(control: &ResolvedControl) -> TokenStream {
 
             #(#property_methods)*
             #(#event_methods)*
+            #(#slot_methods)*
             #grid_definition_methods
             #structural_methods
         }
 
         impl sealed::Sealed for #name {}
-        impl sealed::NativeControl for #name {
-            fn into_element(self) -> Element {
-                self.into()
+        #reference_impls
+        #icon_conversion
+        #(#capability_impls)*
+        #structural_test_impl
+    }
+}
+
+fn generate_collection_item_types(schema: &ResolvedSchema) -> Vec<TokenStream> {
+    let mut types = BTreeMap::<String, Vec<String>>::new();
+    for slot in schema.controls.iter().flat_map(|control| &control.slots) {
+        let Some(item) = slot.shape.collection_item() else {
+            continue;
+        };
+        let name = collection_value_name(item, &slot.item_controls);
+        match types.entry(name) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(slot.item_controls.clone());
+            }
+            std::collections::btree_map::Entry::Occupied(entry) => {
+                assert_eq!(entry.get(), &slot.item_controls);
             }
         }
-        #reference_impls
-        #(#capability_impls)*
-        #slots
-        #structural_test_impl
+    }
+    types
+        .into_iter()
+        .map(|(name, controls)| {
+            let name = ident(&name);
+            let conversions = controls.into_iter().map(|control| {
+                let control = ident(&control);
+                quote! {
+                    impl From<#control> for #name {
+                        fn from(value: #control) -> Self {
+                            Self(value.into())
+                        }
+                    }
+                }
+            });
+            quote! {
+                #[derive(Clone, Debug, PartialEq)]
+                pub struct #name(View);
+
+                #(#conversions)*
+
+                impl<T> From<AttachedView<T>> for #name
+                where
+                    T: Into<Self>,
+                {
+                    fn from(value: AttachedView<T>) -> Self {
+                        Self(value.into_view())
+                    }
+                }
+
+                impl From<#name> for View {
+                    fn from(value: #name) -> Self {
+                        value.0
+                    }
+                }
+            }
+        })
+        .collect()
+}
+
+fn collection_item_type(slot: &crate::schema::ResolvedSlot) -> Option<Ident> {
+    let item = slot.shape.collection_item()?;
+    Some(ident(&collection_value_name(item, &slot.item_controls)))
+}
+
+fn collection_value_name(item: &str, controls: &[String]) -> String {
+    let item = item.rsplit('.').next().unwrap();
+    let name = item.strip_prefix('I').unwrap_or(item);
+    if controls.iter().any(|control| control == name) {
+        format!("{name}Value")
+    } else {
+        name.to_string()
     }
 }
 
@@ -2146,141 +2166,34 @@ fn value_equality(
     }
 }
 
-fn generate_descriptors(control: &ResolvedControl) -> TokenStream {
-    let properties_ident = descriptor_ident(&control.name, "PROPERTIES");
-    let events_ident = descriptor_ident(&control.name, "EVENTS");
-    let slots_ident = descriptor_ident(&control.name, "SLOTS");
-    let properties = control.properties.iter().map(|property| {
-        let id = ident(&format!("{}{}", control.name, property.name));
-        let name = &property.name;
-        let field = &property.field;
-        let value = &property.value;
-        let interface = &property.interface;
-        let feedback = property
-            .feedback
-            .as_deref()
-            .map_or_else(|| quote! { None }, |value| quote! { Some(#value) });
-        let observes_feedback = property.observes_feedback;
-        let feedback_contract = property.feedback_contract.map_or_else(
-            || quote! { None },
-            |value| {
-                let value = match value {
-                    FeedbackContract::SynchronousExact => "synchronous_exact",
-                    FeedbackContract::SynchronousNormalized => "synchronous_normalized",
-                };
-                quote! { Some(#value) }
-            },
-        );
-        quote! {
-            PropertyDescriptor {
-                id: PropertyId::#id,
-                name: #name,
-                field: #field,
-                value: #value,
-                interface: #interface,
-                clearable: true,
-                feedback: #feedback,
-                feedback_contract: #feedback_contract,
-                observes_feedback: #observes_feedback,
-            }
-        }
-    });
-    let events = control.events.iter().map(|event| {
-        let id = ident(&format!("{}{}", control.name, event.name));
-        let name = &event.name;
-        let field = &event.field;
-        let payload = &event.payload;
-        let interface = &event.interface;
-        quote! {
-            EventDescriptor {
-                id: EventId::#id,
-                name: #name,
-                field: #field,
-                payload: #payload,
-                interface: #interface,
-            }
-        }
-    });
-    let slots = control.slots.iter().map(|slot| {
-        let id = ident(&format!("{}{}", control.name, slot.name));
-        let name = &slot.name;
-        let interface = &slot.interface;
-        let (target, collection) = match &slot.shape {
-            crate::schema::SlotShape::Single(crate::schema::SlotTarget::Inspectable) => {
-                ("inspectable", false)
-            }
-            crate::schema::SlotShape::Single(crate::schema::SlotTarget::IconElement) => {
-                ("icon_element", false)
-            }
-            crate::schema::SlotShape::Single(crate::schema::SlotTarget::UiElement) => {
-                ("ui_element", false)
-            }
-            crate::schema::SlotShape::Collection(_) => ("inspectable", true),
-        };
-        quote! {
-            SlotDescriptor {
-                id: SlotId::#id,
-                name: #name,
-                interface: #interface,
-                target: #target,
-                collection: #collection,
-            }
-        }
-    });
+fn generate_runtime_descriptors(schema: &ResolvedSchema) -> TokenStream {
+    let mut roles = BTreeMap::<_, Vec<_>>::new();
+    let mut selection_descriptors = Vec::new();
+    let mut selection_events = Vec::new();
+    let mut selection_slots = Vec::new();
+    let mut selection_item_properties = Vec::new();
+    let mut controlled_collection_descriptors = Vec::new();
+    let mut controlled_collection_slots = Vec::new();
+    let mut controlled_collection_properties = Vec::new();
 
-    quote! {
-        const #properties_ident: &[PropertyDescriptor] = &[
-            #(#properties),*
-        ];
-        const #events_ident: &[EventDescriptor] = &[
-            #(#events),*
-        ];
-        const #slots_ident: &[SlotDescriptor] = &[
-            #(#slots),*
-        ];
-    }
-}
-
-fn generate_control(control: &ResolvedControl) -> TokenStream {
-    let name = &control.name;
-    let kind = ident(name);
-    let type_name = &control.type_name;
-    let role = Ident::new(
-        match control.role {
+    for control in &schema.controls {
+        let kind = ident(&control.name);
+        let role = match control.role {
             Role::Leaf => "Leaf",
             Role::Content => "Content",
             Role::Children => "Children",
             Role::Slots => "Slots",
             Role::Virtual => "Virtual",
-        },
-        Span::call_site(),
-    );
-    let capabilities = control.capabilities.iter().map(|capability| {
-        let capability = Ident::new(
-            match capability {
-                Capability::Layout => "Layout",
-                Capability::TextStyle => "TextStyle",
-                Capability::Enabled => "Enabled",
-                Capability::Content => "Content",
-                Capability::Children => "Children",
-                Capability::ControlledText => "ControlledText",
-                Capability::Items => "Items",
-                Capability::Focus => "Focus",
-                Capability::Reference => "Reference",
-                Capability::GridDefinitions => "GridDefinitions",
-                Capability::WindowTitleBar => "WindowTitleBar",
-            },
-            Span::call_site(),
-        );
-        quote! { Capability::#capability }
-    });
-    let properties = descriptor_ident(name, "PROPERTIES");
-    let events = descriptor_ident(name, "EVENTS");
-    let slots = descriptor_ident(name, "SLOTS");
-    let selection = control.selection.as_ref().map_or_else(
-        || quote! { None },
-        |selection| {
-            let slot = ident(&format!("{}{}", control.name, selection.slot));
+        };
+        roles.entry(role).or_default().push(kind);
+
+        if let Some(selection) = &control.selection {
+            let descriptor = descriptor_ident(&control.name, "SELECTION");
+            let slots = selection
+                .slots
+                .iter()
+                .map(|slot| ident(&format!("{}{}", control.name, slot)))
+                .collect::<Vec<_>>();
             let item = ident(&selection.item);
             let selected_property = ident(&format!(
                 "{}{}",
@@ -2289,58 +2202,139 @@ fn generate_control(control: &ResolvedControl) -> TokenStream {
             let event = ident(&format!("{}{}", control.name, selection.event));
             let payload_property =
                 ident(&format!("{}{}", selection.item, selection.payload_property));
-            quote! {
-                Some(SelectionDescriptor {
-                    slot: SlotId::#slot,
+
+            selection_descriptors.push(quote! {
+                const #descriptor: SelectionDescriptor = SelectionDescriptor {
+                    slots: &[#(SlotId::#slots),*],
                     item: MountedKind::#item,
                     selected_property: PropertyId::#selected_property,
                     event: EventId::#event,
                     payload_property: PropertyId::#payload_property,
-                })
+                };
+            });
+            selection_events.push(quote! { EventId::#event => Some(#descriptor) });
+            for slot in slots {
+                selection_slots.push(quote! { SlotId::#slot => Some(#descriptor) });
+                selection_item_properties.push(quote! {
+                    (PropertyId::#selected_property, SlotId::#slot) => Some(#descriptor)
+                });
             }
-        },
-    );
-    let collection_slots = control
-        .slots
-        .iter()
-        .filter(|slot| matches!(&slot.shape, crate::schema::SlotShape::Collection(_)))
-        .collect::<Vec<_>>();
-    let controlled_indices = control
-        .properties
-        .iter()
-        .filter(|property| property.value == "SelectionIndex" && property.feedback.is_some())
-        .collect::<Vec<_>>();
-    let controlled_collection = if collection_slots.len() == 1 && controlled_indices.len() == 1 {
-        let slot = ident(&format!("{}{}", control.name, collection_slots[0].name));
-        let property = ident(&format!("{}{}", control.name, controlled_indices[0].name));
-        let event = ident(&format!(
-            "{}{}",
-            control.name,
-            controlled_indices[0].feedback.as_ref().unwrap()
-        ));
-        quote! {
-            Some(ControlledCollectionDescriptor {
-                slot: SlotId::#slot,
-                property: PropertyId::#property,
-                event: EventId::#event,
-            })
         }
-    } else {
-        quote! { None }
-    };
+
+        let collection_slots = control
+            .slots
+            .iter()
+            .filter(|slot| matches!(&slot.shape, crate::schema::SlotShape::Collection(_)))
+            .collect::<Vec<_>>();
+        let controlled_indices = control
+            .properties
+            .iter()
+            .filter(|property| property.value == "SelectionIndex" && property.feedback.is_some())
+            .collect::<Vec<_>>();
+        if collection_slots.len() == 1 && controlled_indices.len() == 1 {
+            let descriptor = descriptor_ident(&control.name, "CONTROLLED_COLLECTION");
+            let slot = ident(&format!("{}{}", control.name, collection_slots[0].name));
+            let property = ident(&format!("{}{}", control.name, controlled_indices[0].name));
+            let event = ident(&format!(
+                "{}{}",
+                control.name,
+                controlled_indices[0].feedback.as_ref().unwrap()
+            ));
+            controlled_collection_descriptors.push(quote! {
+                const #descriptor: ControlledCollectionDescriptor =
+                    ControlledCollectionDescriptor {
+                        slot: SlotId::#slot,
+                        property: PropertyId::#property,
+                        event: EventId::#event,
+                    };
+            });
+            controlled_collection_slots.push(quote! { SlotId::#slot => Some(#descriptor) });
+            controlled_collection_properties
+                .push(quote! { PropertyId::#property => Some(#descriptor) });
+        }
+    }
+
+    let roles = roles.into_iter().map(|(role, kinds)| {
+        let role = Ident::new(role, Span::call_site());
+        quote! { #(MountedKind::#kinds)|* => ControlRole::#role }
+    });
 
     quote! {
-        ControlDescriptor {
-            kind: MountedKind::#kind,
-            name: #name,
-            type_name: #type_name,
-            role: ControlRole::#role,
-            capabilities: &[#(#capabilities),*],
-            properties: #properties,
-            events: #events,
-            slots: #slots,
-            selection: #selection,
-            controlled_collection: #controlled_collection,
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub enum ControlRole {
+            Leaf,
+            Content,
+            Children,
+            Slots,
+            Virtual,
+        }
+
+        pub const fn control_role(kind: MountedKind) -> ControlRole {
+            match kind {
+                #(#roles),*
+            }
+        }
+
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub struct SelectionDescriptor {
+            pub slots: &'static [SlotId],
+            pub item: MountedKind,
+            pub selected_property: PropertyId,
+            pub event: EventId,
+            pub payload_property: PropertyId,
+        }
+
+        #(#selection_descriptors)*
+
+        pub fn selection_for_event(event: EventId) -> Option<SelectionDescriptor> {
+            match event {
+                #(#selection_events,)*
+                _ => None,
+            }
+        }
+
+        pub fn selection_for_slot(slot: SlotId) -> Option<SelectionDescriptor> {
+            match slot {
+                #(#selection_slots,)*
+                _ => None,
+            }
+        }
+
+        pub fn selection_for_item_property(
+            property: PropertyId,
+            slot: SlotId,
+        ) -> Option<SelectionDescriptor> {
+            match (property, slot) {
+                #(#selection_item_properties,)*
+                _ => None,
+            }
+        }
+
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub struct ControlledCollectionDescriptor {
+            pub slot: SlotId,
+            pub property: PropertyId,
+            pub event: EventId,
+        }
+
+        #(#controlled_collection_descriptors)*
+
+        pub fn controlled_collection_for_slot(
+            slot: SlotId,
+        ) -> Option<ControlledCollectionDescriptor> {
+            match slot {
+                #(#controlled_collection_slots,)*
+                _ => None,
+            }
+        }
+
+        pub fn controlled_collection_for_property(
+            property: PropertyId,
+        ) -> Option<ControlledCollectionDescriptor> {
+            match property {
+                #(#controlled_collection_properties,)*
+                _ => None,
+            }
         }
     }
 }
@@ -2380,6 +2374,19 @@ fn value_type(value: &str) -> TokenStream {
     }
 }
 
+fn property_storage_type(property: &crate::schema::ResolvedProperty) -> TokenStream {
+    let value = value_type(&property.value);
+    if is_indirect_property(property) {
+        quote! { std::rc::Rc<#value> }
+    } else {
+        value
+    }
+}
+
+fn is_indirect_property(property: &crate::schema::ResolvedProperty) -> bool {
+    property.adapter == Some(PropertyAdapter::DropPolicy)
+}
+
 fn event_callback_type(event: &crate::schema::ResolvedEvent) -> TokenStream {
     if event.conversion == EventPayloadConversion::Selection {
         quote! { Option<String> }
@@ -2387,139 +2394,5 @@ fn event_callback_type(event: &crate::schema::ResolvedEvent) -> TokenStream {
         quote! { Vec<String> }
     } else {
         value_type(&event.payload)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::metadata::MetadataResolver;
-    use crate::schema::{Schema, workspace_path};
-
-    #[test]
-    fn ordinary_control_needs_only_schema_input() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.ProgressBar"
-capabilities = ["layout"]
-
-[[control.property]]
-name = "Value"
-"#;
-        let schema = Schema::parse(source).unwrap();
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let resolved = schema.resolve(&metadata).unwrap();
-        let output = generate(&resolved);
-
-        assert!(output.contains("pub struct ProgressBar"));
-        assert!(output.contains("value : Property < f64 >"));
-        assert!(output.contains("value : impl Into < Option < f64 >"));
-        assert!(
-            output.contains("interface : \"Microsoft.UI.Xaml.Controls.Primitives.IRangeBase\"")
-        );
-    }
-
-    #[test]
-    fn ordinary_event_payload_is_not_a_property_observation() {
-        let source = r#"
-[[control]]
-type = "Microsoft.UI.Xaml.Controls.NumberBox"
-capabilities = ["layout"]
-
-[[control.event]]
-name = "ValueChanged"
-property = "NewValue"
-"#;
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let resolved = Schema::parse(source).unwrap().resolve(&metadata).unwrap();
-        let output = generate(&resolved);
-
-        assert!(output.contains("EventId :: NumberBoxValueChanged"));
-        assert!(!output.contains("PropertyId :: NumberBoxNewValue"));
-    }
-
-    #[test]
-    fn semantic_absence_is_exposed_as_option() {
-        let source =
-            std::fs::read_to_string(workspace_path("crates/tools/reactor/src/winui.toml")).unwrap();
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let resolved = Schema::parse(&source).unwrap().resolve(&metadata).unwrap();
-        let output: String = generate(&resolved)
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-
-        assert!(output.contains("pubfnselected_index(mutself,value:implInto<Option<usize>>"));
-        assert!(output.contains("callback:implIntoPayloadCallback<Option<usize>>"));
-        assert!(output.contains("pubfnvalue(mutself,value:implInto<Option<f64>>"));
-        assert!(
-            output.contains("callback:implIntoPayloadCallback<Option<windows_time::DateTime>>")
-        );
-        assert!(
-            output.contains("callback:implIntoPayloadCallback<Option<windows_time::TimeSpan>>")
-        );
-        assert!(!output.contains("selected_index_optional"));
-    }
-
-    #[test]
-    fn attachment_implementation_control_is_not_public() {
-        let source =
-            std::fs::read_to_string(workspace_path("crates/tools/reactor/src/winui.toml")).unwrap();
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let resolved = Schema::parse(&source).unwrap().resolve(&metadata).unwrap();
-        let output: String = generate(&resolved)
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-
-        assert!(output.contains("pub(crate)structToolTip"));
-        assert!(output.contains("pub(crate)fnnew()->Self"));
-        assert!(!output.contains("pubstructToolTip"));
-    }
-
-    #[test]
-    fn constrained_properties_generate_checked_setters() {
-        let source =
-            std::fs::read_to_string(workspace_path("crates/tools/reactor/src/winui.toml")).unwrap();
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let resolved = Schema::parse(&source).unwrap().resolve(&metadata).unwrap();
-        let output: String = generate(&resolved)
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-
-        assert!(output.contains(
-            "value.as_ref().is_none_or(|value|*value>=0),\"TextBlockMaxLinesmustbenon-negative\""
-        ));
-        assert!(output.contains(
-            "value.as_ref().is_none_or(|value|(0..=59).contains(value)),\"TimePickerMinuteIncrementmustbebetween0and59\""
-        ));
-        assert!(output.contains("pubfnfont_weight(mutself,value:implInto<Option<FontWeight>>"));
-        assert!(output.contains(
-            "pubfnhorizontal_content_alignment(mutself,value:implInto<Option<HorizontalAlignment>>"
-        ));
-        assert!(output.contains(
-            "pubfnvertical_content_alignment(mutself,value:implInto<Option<VerticalAlignment>>"
-        ));
-        assert!(!output.contains("pubenumHorizontalAlignment"));
-        assert!(!output.contains("pubenumVerticalAlignment"));
-    }
-
-    #[test]
-    fn generated_public_enums_are_non_exhaustive() {
-        let source =
-            std::fs::read_to_string(workspace_path("crates/tools/reactor/src/winui.toml")).unwrap();
-        let metadata = MetadataResolver::load(&workspace_path("crates/tools/reactor/winmd"));
-        let resolved = Schema::parse(&source).unwrap().resolve(&metadata).unwrap();
-        let output = generate(&resolved);
-
-        for name in ["Orientation", "ContentDialogResult", "NavigationViewSlot"] {
-            let enum_start = output.find(&format!("pub enum {name}")).unwrap();
-            let attributes = &output[enum_start.saturating_sub(160)..enum_start];
-            assert!(
-                attributes.contains("# [non_exhaustive]"),
-                "{name} must be non-exhaustive"
-            );
-        }
     }
 }

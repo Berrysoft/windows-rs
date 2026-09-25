@@ -1,4 +1,4 @@
-use windows_clang::*;
+use helpers::*;
 use windows_rdl::*;
 
 // WebView2 owns its SDK pin here: the headers are downloaded from this exact NuGet package
@@ -34,7 +34,11 @@ fn main() {
     // emitted, not its #includes), so both headers are listed: WebView2.h yields the core
     // COM API and WebView2Interop.h yields the ICoreWebView2Interop2::GetComICoreWebView2
     // bridge used to reuse these COM wrappers from the WinUI/WinRT WebView2 XAML control.
-    clang()
+    windows_clang::clang()
+        .inputs([
+            include.join("WebView2.h"),
+            include_winrt.join("WebView2Interop.h"),
+        ])
         .args([
             "-x",
             "c++",
@@ -42,12 +46,17 @@ fn main() {
             "-fms-extensions",
             &include_arg,
         ])
-        .input(include.join("WebView2.h"))
-        .input(include_winrt.join("WebView2Interop.h"))
         .reference_default()
-        .output("target/webview/WebView2.rdl")
+        .symbols([
+            "CompareBrowserVersions",
+            "CreateCoreWebView2Environment",
+            "CreateCoreWebView2EnvironmentWithOptions",
+            "GetAvailableCoreWebView2BrowserVersionString",
+            "GetAvailableCoreWebView2BrowserVersionStringWithOptions",
+        ])
         .namespace("WebView2")
         .library("WebView2Loader.dll")
+        .output("target/webview/WebView2.rdl")
         .write()
         .unwrap();
 

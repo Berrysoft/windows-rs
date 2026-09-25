@@ -35,6 +35,10 @@ pub use amvideo::*;
 pub mod appmodel;
 #[cfg(feature = "appmodel")]
 pub use appmodel::*;
+#[cfg(feature = "appserviceinterop")]
+pub mod appserviceinterop;
+#[cfg(feature = "appserviceinterop")]
+pub use appserviceinterop::*;
 #[cfg(feature = "appxpackaging")]
 pub mod appxpackaging;
 #[cfg(feature = "appxpackaging")]
@@ -635,6 +639,10 @@ pub use hidusage::*;
 pub mod hlink;
 #[cfg(feature = "hlink")]
 pub use hlink::*;
+#[cfg(feature = "holographicspaceinterop")]
+pub mod holographicspaceinterop;
+#[cfg(feature = "holographicspaceinterop")]
+pub use holographicspaceinterop::*;
 #[cfg(feature = "hstring")]
 pub mod hstring;
 #[cfg(feature = "hstring")]
@@ -779,6 +787,10 @@ pub use joystickapi::*;
 pub mod kernelspecs;
 #[cfg(feature = "kernelspecs")]
 pub use kernelspecs::*;
+#[cfg(feature = "knownfolders")]
+pub mod knownfolders;
+#[cfg(feature = "knownfolders")]
+pub use knownfolders::*;
 #[cfg(feature = "ks")]
 pub mod ks;
 #[cfg(feature = "ks")]

@@ -7,19 +7,28 @@ Microsoft::UI::Dispatching::IDispatcherQueue::TryEnqueueWithPriority
 Microsoft::UI::Dispatching::IDispatcherQueueTimer::{put_Interval, put_IsRepeating, add_Tick, remove_Tick, Start, Stop}
 Microsoft::UI::Input::IPointerPoint::{get_Position, get_Properties}
 Microsoft::UI::Input::IPointerPointProperties::{get_IsLeftButtonPressed, get_IsMiddleButtonPressed, get_IsRightButtonPressed}
+Microsoft::UI::Input::InputKeyboardSource::{add_KeyDown, remove_KeyDown, GetForIsland}
+Microsoft::UI::Xaml::UIElement::get_XamlRoot
+Microsoft::UI::Xaml::Window::get_Content
+Microsoft::UI::Xaml::XamlRoot::get_ContentIsland
 Microsoft::UI::Text::ITextDocument::{GetText, SetText}
 Microsoft::UI::Text::TextGetOptions::None
+Microsoft::UI::Text::TextGetOptions::UseLf
 Microsoft::UI::Text::TextSetOptions::None
 Microsoft::UI::Windowing::IAppWindow2::{get_ClientSize, ResizeClient}
-Microsoft::UI::Windowing::IAppWindow::{get_TitleBar, get_Presenter, get_Size, SetIcon}
+Microsoft::UI::Windowing::IAppWindow::{get_TitleBar, get_Presenter, get_Size, put_IsShownInSwitchers, MoveAndResize, Hide, SetIcon}
+Microsoft::UI::Windowing::IOverlappedPresenter::{put_IsAlwaysOnTop, SetBorderAndTitleBar}
 Microsoft::UI::Windowing::IAppWindowTitleBar2::put_PreferredHeightOption
 Microsoft::UI::Windowing::IAppWindowTitleBar3::put_PreferredTheme
 Microsoft::UI::Windowing::IOverlappedPresenter3::{put_PreferredMinimumWidth, put_PreferredMinimumHeight, put_PreferredMaximumWidth, put_PreferredMaximumHeight}
 Microsoft::UI::Windowing::TitleBarHeightOption::{Standard, Tall}
 Microsoft::UI::Windowing::TitleBarTheme::{UseDefaultAppMode, Light, Dark}
-Microsoft::UI::Xaml::Application::{CreateInstance, Current, Start}
+Microsoft::UI::Xaml::Application::{CreateInstance, Current, Exit, Start}
 Microsoft::UI::Xaml::ApplicationInitializationCallback
+Microsoft::UI::Xaml::DispatcherShutdownMode::OnExplicitShutdown
 Microsoft::UI::Xaml::Automation::AutomationProperties::{SetAutomationId, SetHeadingLevel, SetName}
+Microsoft::UI::Xaml::Automation::Peers::IMenuFlyoutItemAutomationPeerFactory::CreateInstanceWithOwner
+Microsoft::UI::Xaml::Automation::Provider::IInvokeProvider::Invoke
 Microsoft::UI::Xaml::Controls::Canvas::{LeftProperty, SetLeft, SetTop, TopProperty}
 Microsoft::UI::Xaml::Controls::ColumnDefinition::CreateInstance
 Microsoft::UI::Xaml::Controls::ColumnDefinitionCollection::{}
@@ -29,7 +38,7 @@ Microsoft::UI::Xaml::Controls::Flyout::CreateInstance
 Microsoft::UI::Xaml::Controls::Grid::{ColumnProperty, ColumnSpanProperty, RowProperty, RowSpanProperty, SetColumn, SetColumnSpan, SetRow, SetRowSpan}
 Microsoft::UI::Xaml::Controls::IButton::put_Flyout
 Microsoft::UI::Xaml::Controls::ICalendarDatePicker::put_Date
-Microsoft::UI::Xaml::Controls::IColumnDefinition::{get_Width, put_Width}
+Microsoft::UI::Xaml::Controls::IColumnDefinition::{get_MaxWidth, get_MinWidth, get_Width, put_MaxWidth, put_MinWidth, put_Width}
 Microsoft::UI::Xaml::Controls::ICommandBarFlyout::{get_PrimaryCommands, get_SecondaryCommands}
 Microsoft::UI::Xaml::Controls::IContentDialog::{Hide, ShowAsync}
 Microsoft::UI::Xaml::Controls::IDatePicker::put_SelectedDate
@@ -43,7 +52,7 @@ Microsoft::UI::Xaml::Controls::IMenuFlyoutSubItem::{get_Items, put_Text}
 Microsoft::UI::Xaml::Controls::INumberBox::get_Value
 Microsoft::UI::Xaml::Controls::IRichEditBox::{get_Document, get_IsReadOnly}
 Microsoft::UI::Xaml::Controls::IRichTextBlock::get_Blocks
-Microsoft::UI::Xaml::Controls::IRowDefinition::{get_Height, put_Height}
+Microsoft::UI::Xaml::Controls::IRowDefinition::{get_Height, get_MaxHeight, get_MinHeight, put_Height, put_MaxHeight, put_MinHeight}
 Microsoft::UI::Xaml::Controls::ISplitButton::put_Flyout
 Microsoft::UI::Xaml::Controls::ISplitView::get_IsPaneOpen
 Microsoft::UI::Xaml::Controls::ISwapChainPanel::{get_CompositionScaleX, get_CompositionScaleY, add_CompositionScaleChanged, remove_CompositionScaleChanged}
@@ -59,7 +68,7 @@ Microsoft::UI::Xaml::Controls::MenuFlyoutSeparator::CreateInstance
 Microsoft::UI::Xaml::Controls::MenuFlyoutSubItem::CreateInstance
 Microsoft::UI::Xaml::Controls::Primitives::FlyoutPlacementMode
 Microsoft::UI::Xaml::Controls::Primitives::IButtonBase::{add_Click, remove_Click}
-Microsoft::UI::Xaml::Controls::Primitives::IFlyoutBase::put_Placement
+Microsoft::UI::Xaml::Controls::Primitives::IFlyoutBase::{ShowAt, Hide, put_XamlRoot, put_ShouldConstrainToRootBounds, put_Placement, add_Opened, remove_Opened, add_Closed, remove_Closed}
 Microsoft::UI::Xaml::Controls::Primitives::IRangeBase::get_Value
 Microsoft::UI::Xaml::Controls::Primitives::IToggleButton::get_IsChecked
 Microsoft::UI::Xaml::Controls::Primitives::PlacementMode
@@ -85,6 +94,7 @@ Microsoft::UI::Xaml::GridLength
 Microsoft::UI::Xaml::GridUnitType
 Microsoft::UI::Xaml::Hosting::ElementCompositionPreview::{GetElementVisual, SetElementChildVisual}
 Microsoft::UI::Xaml::IApplication::get_Resources
+Microsoft::UI::Xaml::IApplication3::put_DispatcherShutdownMode
 Microsoft::UI::Xaml::IApplicationOverrides::{}
 Microsoft::UI::Xaml::IDependencyObject::ClearValue
 Microsoft::UI::Xaml::IElementFactory::{}
@@ -96,14 +106,22 @@ Microsoft::UI::Xaml::IFrameworkElement::put_Style
 Microsoft::UI::Xaml::IFrameworkElementStatics::{get_WidthProperty, get_HeightProperty, get_MinWidthProperty, get_MaxWidthProperty, get_MinHeightProperty, get_MaxHeightProperty, get_HorizontalAlignmentProperty, get_VerticalAlignmentProperty, get_MarginProperty}
 Microsoft::UI::Xaml::IResourceDictionary::get_MergedDictionaries
 Microsoft::UI::Xaml::ISizeChangedEventArgs::get_NewSize
-Microsoft::UI::Xaml::IUIElement::{CapturePointer, Focus, ReleasePointerCapture, ReleasePointerCaptures, get_XamlRoot, put_XamlRoot, put_Opacity, StartBringIntoView}
+Microsoft::UI::Xaml::IUIElement::{CapturePointer, Focus, ReleasePointerCapture, ReleasePointerCaptures, get_XamlRoot, put_XamlRoot, get_FocusState, put_Opacity, StartBringIntoView}
+Microsoft::UI::Xaml::IUIElement::put_Transitions
 Microsoft::UI::Xaml::IUIElement::{add_PointerEntered, add_PointerExited, add_PointerMoved, add_PointerPressed, add_PointerReleased, remove_PointerEntered, remove_PointerExited, remove_PointerMoved, remove_PointerPressed, remove_PointerReleased}
 Microsoft::UI::Xaml::IUIElementStatics::get_OpacityProperty
+Microsoft::UI::Xaml::IUIElementStatics::get_TransitionsProperty
+Microsoft::UI::Xaml::Media::Animation::RepositionThemeTransition::CreateInstance
+Microsoft::UI::Xaml::Media::Animation::Transition::{}
+Microsoft::UI::Xaml::Media::Animation::TransitionCollection::CreateInstance
 Microsoft::UI::Xaml::IWindow2::{get_AppWindow, put_SystemBackdrop}
 Microsoft::UI::Xaml::IWindow::{Activate, Close, Closed, put_Content, put_Title}
 Microsoft::UI::Xaml::IWindow::{put_ExtendsContentIntoTitleBar, SetTitleBar}
 Microsoft::UI::Xaml::IXamlRoot::{get_RasterizationScale, add_Changed, remove_Changed}
 Microsoft::UI::Xaml::Input::IPointerRoutedEventArgs::{GetCurrentPoint, get_Pointer}
+Microsoft::UI::Xaml::Input::IKeyRoutedEventArgs::{get_Key, get_OriginalKey, get_KeyStatus, put_Handled}
+Microsoft::UI::Xaml::Input::ICharacterReceivedRoutedEventArgs::{get_Character, get_KeyStatus, put_Handled}
+Microsoft::UI::Xaml::IRoutedEventArgs::get_OriginalSource
 Microsoft::UI::Xaml::LaunchActivatedEventArgs
 Microsoft::UI::Xaml::Markup::IXamlMetadataProvider
 Microsoft::UI::Xaml::Markup::IXamlType::{}
@@ -118,6 +136,7 @@ Microsoft::UI::Xaml::Style
 Microsoft::UI::Xaml::UIElement::{}
 Microsoft::UI::Xaml::Window::CreateInstance
 Microsoft::UI::Xaml::XamlTypeInfo::XamlControlsXamlMetaDataProvider::CreateInstance
+Windows::Graphics::RectInt32
 Windows::Graphics::SizeInt32
 Windows::UI::Text::FontStyle
 Windows::UI::Text::FontWeight
@@ -131,9 +150,15 @@ Windows::Win32::E_FAIL
 Windows::Win32::ERROR_INSUFFICIENT_BUFFER
 Windows::Win32::GetCurrentPackageFullName
 Windows::Win32::GetDpiForWindow
+Windows::Win32::GetLastError
+Windows::Win32::GetWindowLongW
+Windows::Win32::GetKeyboardState
 Windows::Win32::GetProcessHeap
 Windows::Win32::HeapFree
 Windows::Win32::IDYES
+Windows::Win32::IsIconic
+Windows::Win32::GWL_EXSTYLE
+Windows::Win32::LWA_ALPHA
 Windows::Win32::MB_ICONERROR
 Windows::Win32::MB_YESNO
 Windows::Win32::MessageBoxW
@@ -146,10 +171,17 @@ Windows::Win32::PackageDependencyProcessorArchitectures::PackageDependencyProces
 Windows::Win32::PackageDependencyProcessorArchitectures::PackageDependencyProcessorArchitectures_None
 Windows::Win32::PostQuitMessage
 Windows::Win32::RPC_E_CHANGED_MODE
+Windows::Win32::SetForegroundWindow
+Windows::Win32::SetLastError
+Windows::Win32::SetLayeredWindowAttributes
+Windows::Win32::SetWindowLongW
 Windows::Win32::SetProcessDpiAwarenessContext
+Windows::Win32::ShowWindow
 Windows::Win32::ShellExecuteW
 Windows::Win32::STATEREPOSITORY_E_DEPENDENCY_NOT_RESOLVED
+Windows::Win32::SW_RESTORE
 Windows::Win32::SW_SHOWNORMAL
+Windows::Win32::WS_EX_LAYERED
 Windows::Win32::TryCreatePackageDependency
 extras::ISwapChainPanelNative::SetSwapChain
 extras::IWindowNative::get_WindowHandle

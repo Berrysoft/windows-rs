@@ -807,6 +807,10 @@ pub use joystickapi::*;
 pub mod kernelspecs;
 #[cfg(feature = "kernelspecs")]
 pub use kernelspecs::*;
+#[cfg(feature = "knownfolders")]
+pub mod knownfolders;
+#[cfg(feature = "knownfolders")]
+pub use knownfolders::*;
 #[cfg(feature = "ks")]
 pub mod ks;
 #[cfg(feature = "ks")]
@@ -2063,6 +2067,10 @@ pub use windowsdatapdfinterop::*;
 pub mod windowsdevicesdisplaycoreinterop;
 #[cfg(feature = "windowsdevicesdisplaycoreinterop")]
 pub use windowsdevicesdisplaycoreinterop::*;
+#[cfg(feature = "windowsfoundation")]
+pub mod windowsfoundation;
+#[cfg(feature = "windowsfoundation")]
+pub use windowsfoundation::*;
 #[cfg(feature = "windowsgraphicscaptureinterop")]
 pub mod windowsgraphicscaptureinterop;
 #[cfg(feature = "windowsgraphicscaptureinterop")]

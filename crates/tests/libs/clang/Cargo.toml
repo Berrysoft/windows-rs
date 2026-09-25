@@ -5,11 +5,6 @@ edition = "2024"
 publish = false
 build = "build.rs"
 
-[lib]
-doc = false
-doctest = false
-test = false
-
 [dev-dependencies]
 windows-clang = { workspace = true }
 windows-rdl = { workspace = true }

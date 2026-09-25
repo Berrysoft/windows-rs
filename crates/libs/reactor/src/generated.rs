@@ -16,6 +16,11 @@ pub(crate) struct BorderEvents {
     on_pointer_released: Option<Callback<PointerEventInfo>>,
     on_pointer_capture_lost: Option<Callback<()>>,
     on_pointer_canceled: Option<Callback<()>>,
+    on_preview_key_down: Option<RoutedCallback<KeyEventInfo>>,
+    on_key_up: Option<RoutedCallback<KeyEventInfo>>,
+    on_character_received: Option<RoutedCallback<CharacterEventInfo>>,
+    on_got_focus: Option<Callback<FocusEventInfo>>,
+    on_lost_focus: Option<Callback<FocusEventInfo>>,
 }
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct AutoSuggestBoxEvents {
@@ -395,6 +400,71 @@ pub mod public {
         Single,
         Multiple,
     }
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct CommandBarElement(View);
+    impl From<AppBarButton> for CommandBarElement {
+        fn from(value: AppBarButton) -> Self {
+            Self(value.into())
+        }
+    }
+    impl From<AppBarSeparator> for CommandBarElement {
+        fn from(value: AppBarSeparator) -> Self {
+            Self(value.into())
+        }
+    }
+    impl<T> From<AttachedView<T>> for CommandBarElement
+    where
+        T: Into<Self>,
+    {
+        fn from(value: AttachedView<T>) -> Self {
+            Self(value.into_view())
+        }
+    }
+    impl From<CommandBarElement> for View {
+        fn from(value: CommandBarElement) -> Self {
+            value.0
+        }
+    }
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct MenuBarItemValue(View);
+    impl From<MenuBarItem> for MenuBarItemValue {
+        fn from(value: MenuBarItem) -> Self {
+            Self(value.into())
+        }
+    }
+    impl<T> From<AttachedView<T>> for MenuBarItemValue
+    where
+        T: Into<Self>,
+    {
+        fn from(value: AttachedView<T>) -> Self {
+            Self(value.into_view())
+        }
+    }
+    impl From<MenuBarItemValue> for View {
+        fn from(value: MenuBarItemValue) -> Self {
+            value.0
+        }
+    }
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct SelectorBarItemValue(View);
+    impl From<SelectorBarItem> for SelectorBarItemValue {
+        fn from(value: SelectorBarItem) -> Self {
+            Self(value.into())
+        }
+    }
+    impl<T> From<AttachedView<T>> for SelectorBarItemValue
+    where
+        T: Into<Self>,
+    {
+        fn from(value: AttachedView<T>) -> Self {
+            Self(value.into_view())
+        }
+    }
+    impl From<SelectorBarItemValue> for View {
+        fn from(value: SelectorBarItemValue) -> Self {
+            value.0
+        }
+    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct TextBlock {
         text: Property<String>,
@@ -475,11 +545,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for TextBlock {}
-    impl sealed::NativeControl for TextBlock {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for TextBlock {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -549,11 +614,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for Button {}
-    impl sealed::NativeControl for Button {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl crate::reference::sealed::Sealed for Button {}
     impl crate::reference::ReferenceControl for Button {}
     impl sealed::LayoutControl for Button {
@@ -620,11 +680,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for HyperlinkButton {}
-    impl sealed::NativeControl for HyperlinkButton {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl crate::reference::sealed::Sealed for HyperlinkButton {}
     impl crate::reference::ReferenceControl for HyperlinkButton {}
     impl sealed::LayoutControl for HyperlinkButton {
@@ -677,11 +732,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for RepeatButton {}
-    impl sealed::NativeControl for RepeatButton {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for RepeatButton {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -699,6 +749,8 @@ pub mod public {
     }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct Border {
+        is_tab_stop: Property<bool>,
+        allow_focus_on_interaction: Property<bool>,
         padding: Property<Thickness>,
         border_thickness: Property<Thickness>,
         corner_radius: Property<CornerRadius>,
@@ -708,14 +760,30 @@ pub mod public {
         scale: Property<f64>,
         scale_transition: Property<std::time::Duration>,
         capture_pointer_on_press: Property<bool>,
-        drop_policy: Property<DragDropPolicy>,
+        focus_on_pointer_release: Property<bool>,
+        drop_policy: Property<std::rc::Rc<DragDropPolicy>>,
         events: Option<std::rc::Rc<BorderEvents>>,
+        reference: Option<NativeElementRef>,
         element_state: Option<std::rc::Rc<ElementState>>,
         content: Option<Box<Element>>,
     }
     impl Border {
         pub fn new() -> Self {
             Self::default()
+        }
+        pub fn element_ref(mut self, reference: &ElementRef<Self>) -> Self {
+            self.reference = Some(reference.binding());
+            self
+        }
+        pub fn is_tab_stop(mut self, value: impl Into<Option<bool>>) -> Self {
+            let value = value.into();
+            self.is_tab_stop = Property::from(value);
+            self
+        }
+        pub fn allow_focus_on_interaction(mut self, value: impl Into<Option<bool>>) -> Self {
+            let value = value.into();
+            self.allow_focus_on_interaction = Property::from(value);
+            self
         }
         pub fn padding(mut self, value: impl Into<Thickness>) -> Self {
             let value = value.into();
@@ -834,9 +902,14 @@ pub mod public {
             self.capture_pointer_on_press = Property::from(value);
             self
         }
+        pub fn focus_on_pointer_release(mut self, value: impl Into<Option<bool>>) -> Self {
+            let value = value.into();
+            self.focus_on_pointer_release = Property::from(value);
+            self
+        }
         pub fn drop_policy(mut self, value: impl Into<Option<DragDropPolicy>>) -> Self {
             let value = value.into();
-            self.drop_policy = Property::from(value);
+            self.drop_policy = Property::from(value.map(std::rc::Rc::new));
             self
         }
         pub fn on_drag_enter(mut self, callback: impl IntoPayloadCallback<DragKind>) -> Self {
@@ -942,13 +1015,53 @@ pub mod public {
             .on_pointer_canceled = Some(callback.into_unit_callback());
             self
         }
-    }
-    impl sealed::Sealed for Border {}
-    impl sealed::NativeControl for Border {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn on_preview_key_down(mut self, callback: RoutedCallback<KeyEventInfo>) -> Self {
+            std::rc::Rc::make_mut(
+                self.events
+                    .get_or_insert_with(|| std::rc::Rc::new(Default::default())),
+            )
+            .on_preview_key_down = Some(callback);
+            self
+        }
+        pub fn on_key_up(mut self, callback: RoutedCallback<KeyEventInfo>) -> Self {
+            std::rc::Rc::make_mut(
+                self.events
+                    .get_or_insert_with(|| std::rc::Rc::new(Default::default())),
+            )
+            .on_key_up = Some(callback);
+            self
+        }
+        pub fn on_character_received(
+            mut self,
+            callback: RoutedCallback<CharacterEventInfo>,
+        ) -> Self {
+            std::rc::Rc::make_mut(
+                self.events
+                    .get_or_insert_with(|| std::rc::Rc::new(Default::default())),
+            )
+            .on_character_received = Some(callback);
+            self
+        }
+        pub fn on_got_focus(mut self, callback: impl IntoPayloadCallback<FocusEventInfo>) -> Self {
+            std::rc::Rc::make_mut(
+                self.events
+                    .get_or_insert_with(|| std::rc::Rc::new(Default::default())),
+            )
+            .on_got_focus = Some(callback.into_payload_callback());
+            self
+        }
+        pub fn on_lost_focus(mut self, callback: impl IntoPayloadCallback<FocusEventInfo>) -> Self {
+            std::rc::Rc::make_mut(
+                self.events
+                    .get_or_insert_with(|| std::rc::Rc::new(Default::default())),
+            )
+            .on_lost_focus = Some(callback.into_payload_callback());
+            self
         }
     }
+    impl sealed::Sealed for Border {}
+    impl crate::reference::sealed::Sealed for Border {}
+    impl crate::reference::ReferenceControl for Border {}
     impl sealed::LayoutControl for Border {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -957,6 +1070,7 @@ pub mod public {
     impl LayoutControl for Border {}
     impl sealed::ContentControl for Border {}
     impl ContentControl for Border {}
+    impl FocusControl for Border {}
     #[cfg(test)]
     impl NativeContentTestExt for Border {
         fn native_content(mut self, content: impl Into<Element>) -> Self {
@@ -1000,11 +1114,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for BreadcrumbBar {}
-    impl sealed::NativeControl for BreadcrumbBar {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for BreadcrumbBar {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -1034,11 +1143,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for StackPanel {}
-    impl sealed::NativeControl for StackPanel {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for StackPanel {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -1098,11 +1202,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for VariableSizedWrapGrid {}
-    impl sealed::NativeControl for VariableSizedWrapGrid {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for VariableSizedWrapGrid {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -1168,58 +1267,29 @@ pub mod public {
             self
         }
         pub fn rows(mut self, values: impl IntoIterator<Item = GridLength>) -> Self {
-            let values = values.into_iter().collect::<Vec<_>>();
-            assert!(
-                values.iter().all(|value| value.is_valid()),
-                "Grid lengths must be finite and non-negative",
-            );
-            self.rows = Property::Set(std::rc::Rc::new(values));
+            self.rows = Property::Set(grid_lengths(values));
             self
         }
         pub fn rows_optional<T>(mut self, values: Option<T>) -> Self
         where
             T: IntoIterator<Item = GridLength>,
         {
-            self.rows = Property::from(values.map(|values| {
-                let values = values.into_iter().collect::<Vec<_>>();
-                assert!(
-                    values.iter().all(|value| value.is_valid()),
-                    "Grid lengths must be finite and non-negative",
-                );
-                std::rc::Rc::new(values)
-            }));
+            self.rows = Property::from(values.map(grid_lengths));
             self
         }
         pub fn columns(mut self, values: impl IntoIterator<Item = GridLength>) -> Self {
-            let values = values.into_iter().collect::<Vec<_>>();
-            assert!(
-                values.iter().all(|value| value.is_valid()),
-                "Grid lengths must be finite and non-negative",
-            );
-            self.columns = Property::Set(std::rc::Rc::new(values));
+            self.columns = Property::Set(grid_lengths(values));
             self
         }
         pub fn columns_optional<T>(mut self, values: Option<T>) -> Self
         where
             T: IntoIterator<Item = GridLength>,
         {
-            self.columns = Property::from(values.map(|values| {
-                let values = values.into_iter().collect::<Vec<_>>();
-                assert!(
-                    values.iter().all(|value| value.is_valid()),
-                    "Grid lengths must be finite and non-negative",
-                );
-                std::rc::Rc::new(values)
-            }));
+            self.columns = Property::from(values.map(grid_lengths));
             self
         }
     }
     impl sealed::Sealed for Grid {}
-    impl sealed::NativeControl for Grid {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl crate::reference::sealed::Sealed for Grid {}
     impl crate::reference::ReferenceControl for Grid {}
     impl sealed::LayoutControl for Grid {
@@ -1253,6 +1323,7 @@ pub mod public {
         on_text_changed: Option<Callback<String>>,
         reference: Option<NativeElementRef>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl TextBox {
         pub fn new() -> Self {
@@ -1348,13 +1419,16 @@ pub mod public {
             self.on_text_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for TextBox {}
-    impl sealed::NativeControl for TextBox {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::TextBoxHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for TextBox {}
     impl crate::reference::sealed::Sealed for TextBox {}
     impl crate::reference::ReferenceControl for TextBox {}
     impl sealed::LayoutControl for TextBox {
@@ -1364,20 +1438,6 @@ pub mod public {
     }
     impl LayoutControl for TextBox {}
     impl FocusControl for TextBox {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum TextBoxSlot {
-        Header,
-    }
-    impl sealed::SlotIndex<TextBoxSlot> for TextBox {
-        fn slot_index(slot: TextBoxSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for TextBox {
-        type Slot = TextBoxSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct AutoSuggestBox {
         text: Property<String>,
@@ -1387,6 +1447,7 @@ pub mod public {
         events: Option<std::rc::Rc<AutoSuggestBoxEvents>>,
         reference: Option<NativeElementRef>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl AutoSuggestBox {
         pub fn new() -> Self {
@@ -1459,13 +1520,16 @@ pub mod public {
             .on_suggestion_chosen = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for AutoSuggestBox {}
-    impl sealed::NativeControl for AutoSuggestBox {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::AutoSuggestBoxHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for AutoSuggestBox {}
     impl crate::reference::sealed::Sealed for AutoSuggestBox {}
     impl crate::reference::ReferenceControl for AutoSuggestBox {}
     impl sealed::LayoutControl for AutoSuggestBox {
@@ -1475,20 +1539,6 @@ pub mod public {
     }
     impl LayoutControl for AutoSuggestBox {}
     impl FocusControl for AutoSuggestBox {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum AutoSuggestBoxSlot {
-        Header,
-    }
-    impl sealed::SlotIndex<AutoSuggestBoxSlot> for AutoSuggestBox {
-        fn slot_index(slot: AutoSuggestBoxSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for AutoSuggestBox {
-        type Slot = AutoSuggestBoxSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct PasswordBox {
         password: Property<String>,
@@ -1498,6 +1548,7 @@ pub mod public {
         on_password_changed: Option<Callback<String>>,
         reference: Option<NativeElementRef>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl PasswordBox {
         pub fn new() -> Self {
@@ -1546,13 +1597,16 @@ pub mod public {
             self.on_password_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for PasswordBox {}
-    impl sealed::NativeControl for PasswordBox {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::PasswordBoxHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for PasswordBox {}
     impl crate::reference::sealed::Sealed for PasswordBox {}
     impl crate::reference::ReferenceControl for PasswordBox {}
     impl sealed::LayoutControl for PasswordBox {
@@ -1562,20 +1616,6 @@ pub mod public {
     }
     impl LayoutControl for PasswordBox {}
     impl FocusControl for PasswordBox {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum PasswordBoxSlot {
-        Header,
-    }
-    impl sealed::SlotIndex<PasswordBoxSlot> for PasswordBox {
-        fn slot_index(slot: PasswordBoxSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for PasswordBox {
-        type Slot = PasswordBoxSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct NumberBox {
         minimum: Property<f64>,
@@ -1585,6 +1625,7 @@ pub mod public {
         on_value_changed: Option<Callback<Option<f64>>>,
         reference: Option<NativeElementRef>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl NumberBox {
         pub fn new() -> Self {
@@ -1618,13 +1659,16 @@ pub mod public {
             self.on_value_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for NumberBox {}
-    impl sealed::NativeControl for NumberBox {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::NumberBoxHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for NumberBox {}
     impl crate::reference::sealed::Sealed for NumberBox {}
     impl crate::reference::ReferenceControl for NumberBox {}
     impl sealed::LayoutControl for NumberBox {
@@ -1634,20 +1678,6 @@ pub mod public {
     }
     impl LayoutControl for NumberBox {}
     impl FocusControl for NumberBox {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum NumberBoxSlot {
-        Header,
-    }
-    impl sealed::SlotIndex<NumberBoxSlot> for NumberBox {
-        fn slot_index(slot: NumberBoxSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for NumberBox {
-        type Slot = NumberBoxSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct Slider {
         minimum: Property<f64>,
@@ -1659,6 +1689,7 @@ pub mod public {
         on_value_changed: Option<Callback<f64>>,
         reference: Option<NativeElementRef>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl Slider {
         pub fn new() -> Self {
@@ -1708,13 +1739,16 @@ pub mod public {
             self.on_value_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for Slider {}
-    impl sealed::NativeControl for Slider {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::SliderHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for Slider {}
     impl crate::reference::sealed::Sealed for Slider {}
     impl crate::reference::ReferenceControl for Slider {}
     impl sealed::LayoutControl for Slider {
@@ -1724,20 +1758,6 @@ pub mod public {
     }
     impl LayoutControl for Slider {}
     impl FocusControl for Slider {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum SliderSlot {
-        Header,
-    }
-    impl sealed::SlotIndex<SliderSlot> for Slider {
-        fn slot_index(slot: SliderSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for Slider {
-        type Slot = SliderSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct TitleBar {
         title: Property<String>,
@@ -1748,6 +1768,7 @@ pub mod public {
         events: Option<std::rc::Rc<TitleBarEvents>>,
         element_state: Option<std::rc::Rc<ElementState>>,
         preferred_height: WindowTitleBarHeight,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl TitleBar {
         pub fn new() -> Self {
@@ -1810,34 +1831,30 @@ pub mod public {
             .on_pane_toggle_requested = Some(callback.into_unit_callback());
             self
         }
-    }
-    impl sealed::Sealed for TitleBar {}
-    impl sealed::NativeControl for TitleBar {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn content(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::TitleBarContent,
+                SlotContent::Single(view.into()),
+            );
+            self
+        }
+        pub fn right_header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::TitleBarRightHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for TitleBar {}
     impl sealed::LayoutControl for TitleBar {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for TitleBar {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum TitleBarSlot {
-        Content,
-        RightHeader,
-    }
-    impl sealed::SlotIndex<TitleBarSlot> for TitleBar {
-        fn slot_index(slot: TitleBarSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for TitleBar {
-        type Slot = TitleBarSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct NavigationView {
         is_enabled: Property<bool>,
@@ -1851,6 +1868,7 @@ pub mod public {
         is_pane_open: Property<bool>,
         events: Option<std::rc::Rc<NavigationViewEvents>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl NavigationView {
         pub fn new() -> Self {
@@ -1949,37 +1967,72 @@ pub mod public {
             .on_selected_tag_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for NavigationView {}
-    impl sealed::NativeControl for NavigationView {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn content(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::NavigationViewContent,
+                SlotContent::Single(view.into()),
+            );
+            self
+        }
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::NavigationViewHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
+        }
+        pub fn pane_custom_content(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::NavigationViewPaneCustomContent,
+                SlotContent::Single(view.into()),
+            );
+            self
+        }
+        pub fn pane_footer(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::NavigationViewPaneFooter,
+                SlotContent::Single(view.into()),
+            );
+            self
+        }
+        pub fn menu_items<T>(mut self, children: impl IntoIterator<Item = T>) -> Self
+        where
+            T: Into<KeyedView>,
+        {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::NavigationViewMenuItems,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Into::into).collect(),
+                )),
+            );
+            self
+        }
+        pub fn footer_menu_items<T>(mut self, children: impl IntoIterator<Item = T>) -> Self
+        where
+            T: Into<KeyedView>,
+        {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::NavigationViewFooterMenuItems,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Into::into).collect(),
+                )),
+            );
+            self
         }
     }
+    impl sealed::Sealed for NavigationView {}
     impl sealed::LayoutControl for NavigationView {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for NavigationView {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum NavigationViewSlot {
-        Content,
-        Header,
-        PaneCustomContent,
-        PaneFooter,
-        MenuItems,
-    }
-    impl sealed::SlotIndex<NavigationViewSlot> for NavigationView {
-        fn slot_index(slot: NavigationViewSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for NavigationView {
-        type Slot = NavigationViewSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct NavigationViewItem {
         tag: Property<String>,
@@ -1987,6 +2040,7 @@ pub mod public {
         selects_on_invoked: Property<bool>,
         is_expanded: Property<bool>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl NavigationViewItem {
         pub fn new() -> Self {
@@ -2018,35 +2072,43 @@ pub mod public {
             self.is_expanded = Property::from(value);
             self
         }
-    }
-    impl sealed::Sealed for NavigationViewItem {}
-    impl sealed::NativeControl for NavigationViewItem {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn content(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::NavigationViewItemContent,
+                SlotContent::Single(view.into()),
+            );
+            self
+        }
+        pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::NavigationViewItemIcon,
+                SlotContent::Single(icon.into().into_view()),
+            );
+            self
+        }
+        pub fn menu_items<T>(mut self, children: impl IntoIterator<Item = T>) -> Self
+        where
+            T: Into<KeyedView>,
+        {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::NavigationViewItemMenuItems,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Into::into).collect(),
+                )),
+            );
+            self
         }
     }
+    impl sealed::Sealed for NavigationViewItem {}
     impl sealed::LayoutControl for NavigationViewItem {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for NavigationViewItem {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum NavigationViewItemSlot {
-        Content,
-        Icon,
-        MenuItems,
-    }
-    impl sealed::SlotIndex<NavigationViewItemSlot> for NavigationViewItem {
-        fn slot_index(slot: NavigationViewItemSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for NavigationViewItem {
-        type Slot = NavigationViewItemSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct SplitView {
         open_pane_length: Property<f64>,
@@ -2055,6 +2117,7 @@ pub mod public {
         is_pane_open: Property<bool>,
         on_pane_closed: Option<Callback<bool>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl SplitView {
         pub fn new() -> Self {
@@ -2084,34 +2147,30 @@ pub mod public {
             self.on_pane_closed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for SplitView {}
-    impl sealed::NativeControl for SplitView {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn pane(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::SplitViewPane,
+                SlotContent::Single(view.into()),
+            );
+            self
+        }
+        pub fn content(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::SplitViewContent,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for SplitView {}
     impl sealed::LayoutControl for SplitView {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for SplitView {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum SplitViewSlot {
-        Pane,
-        Content,
-    }
-    impl sealed::SlotIndex<SplitViewSlot> for SplitView {
-        fn slot_index(slot: SplitViewSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for SplitView {
-        type Slot = SplitViewSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct ProgressBar {
         minimum: Property<f64>,
@@ -2164,11 +2223,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for ProgressBar {}
-    impl sealed::NativeControl for ProgressBar {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for ProgressBar {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -2182,6 +2236,7 @@ pub mod public {
         on_toggled: Option<Callback<bool>>,
         reference: Option<NativeElementRef>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl ToggleSwitch {
         pub fn new() -> Self {
@@ -2205,13 +2260,32 @@ pub mod public {
             self.on_toggled = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for ToggleSwitch {}
-    impl sealed::NativeControl for ToggleSwitch {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::ToggleSwitchHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
+        }
+        pub fn on_content(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::ToggleSwitchOnContent,
+                SlotContent::Single(view.into()),
+            );
+            self
+        }
+        pub fn off_content(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::ToggleSwitchOffContent,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for ToggleSwitch {}
     impl crate::reference::sealed::Sealed for ToggleSwitch {}
     impl crate::reference::ReferenceControl for ToggleSwitch {}
     impl sealed::LayoutControl for ToggleSwitch {
@@ -2221,22 +2295,6 @@ pub mod public {
     }
     impl LayoutControl for ToggleSwitch {}
     impl FocusControl for ToggleSwitch {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum ToggleSwitchSlot {
-        Header,
-        OnContent,
-        OffContent,
-    }
-    impl sealed::SlotIndex<ToggleSwitchSlot> for ToggleSwitch {
-        fn slot_index(slot: ToggleSwitchSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for ToggleSwitch {
-        type Slot = ToggleSwitchSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct CheckBox {
         is_checked: Property<bool>,
@@ -2270,11 +2328,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for CheckBox {}
-    impl sealed::NativeControl for CheckBox {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl crate::reference::sealed::Sealed for CheckBox {}
     impl crate::reference::ReferenceControl for CheckBox {}
     impl sealed::LayoutControl for CheckBox {
@@ -2326,11 +2379,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for ToggleButton {}
-    impl sealed::NativeControl for ToggleButton {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl crate::reference::sealed::Sealed for ToggleButton {}
     impl crate::reference::ReferenceControl for ToggleButton {}
     impl sealed::LayoutControl for ToggleButton {
@@ -2394,11 +2442,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for RadioButton {}
-    impl sealed::NativeControl for RadioButton {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl crate::reference::sealed::Sealed for RadioButton {}
     impl crate::reference::ReferenceControl for RadioButton {}
     impl sealed::LayoutControl for RadioButton {
@@ -2424,6 +2467,7 @@ pub mod public {
         max_columns: Property<i32>,
         on_selection_changed: Option<Callback<Option<usize>>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl RadioButtons {
         pub fn new() -> Self {
@@ -2466,33 +2510,22 @@ pub mod public {
             self.on_selection_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for RadioButtons {}
-    impl sealed::NativeControl for RadioButtons {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::RadioButtonsHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for RadioButtons {}
     impl sealed::LayoutControl for RadioButtons {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for RadioButtons {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum RadioButtonsSlot {
-        Header,
-    }
-    impl sealed::SlotIndex<RadioButtonsSlot> for RadioButtons {
-        fn slot_index(slot: RadioButtonsSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for RadioButtons {
-        type Slot = RadioButtonsSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct ItemsRepeater {
         element_state: Option<std::rc::Rc<ElementState>>,
@@ -2526,11 +2559,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for ItemsRepeater {}
-    impl sealed::NativeControl for ItemsRepeater {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for ItemsRepeater {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -2553,11 +2581,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for InfoBadge {}
-    impl sealed::NativeControl for InfoBadge {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for InfoBadge {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -2621,11 +2644,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for InfoBar {}
-    impl sealed::NativeControl for InfoBar {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for InfoBar {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -2666,11 +2684,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for PersonPicture {}
-    impl sealed::NativeControl for PersonPicture {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for PersonPicture {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -2706,11 +2719,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for ScrollViewer {}
-    impl sealed::NativeControl for ScrollViewer {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for ScrollViewer {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -2755,11 +2763,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for ScrollView {}
-    impl sealed::NativeControl for ScrollView {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for ScrollView {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -2841,11 +2844,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for Image {}
-    impl sealed::NativeControl for Image {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl crate::reference::sealed::Sealed for Image {}
     impl crate::reference::ReferenceControl for Image {}
     impl sealed::LayoutControl for Image {
@@ -2900,11 +2898,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for ProgressRing {}
-    impl sealed::NativeControl for ProgressRing {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for ProgressRing {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -2916,6 +2909,7 @@ pub mod public {
         is_enabled: Property<bool>,
         on_selected_tag_changed: Option<Callback<Option<String>>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl ListBox {
         pub fn new() -> Self {
@@ -2933,33 +2927,27 @@ pub mod public {
             self.on_selected_tag_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for ListBox {}
-    impl sealed::NativeControl for ListBox {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn items<T>(mut self, children: impl IntoIterator<Item = T>) -> Self
+        where
+            T: Into<KeyedView>,
+        {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::ListBoxItems,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Into::into).collect(),
+                )),
+            );
+            self
         }
     }
+    impl sealed::Sealed for ListBox {}
     impl sealed::LayoutControl for ListBox {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for ListBox {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum ListBoxSlot {
-        Items,
-    }
-    impl sealed::SlotIndex<ListBoxSlot> for ListBox {
-        fn slot_index(slot: ListBoxSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for ListBox {
-        type Slot = ListBoxSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct Rectangle {
         fill: Property<Brush>,
@@ -3030,11 +3018,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for Rectangle {}
-    impl sealed::NativeControl for Rectangle {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for Rectangle {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -3087,11 +3070,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for Ellipse {}
-    impl sealed::NativeControl for Ellipse {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for Ellipse {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -3172,11 +3150,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for Line {}
-    impl sealed::NativeControl for Line {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for Line {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -3199,9 +3172,9 @@ pub mod public {
         }
     }
     impl sealed::Sealed for SymbolIcon {}
-    impl sealed::NativeControl for SymbolIcon {
-        fn into_element(self) -> Element {
-            self.into()
+    impl From<SymbolIcon> for Icon {
+        fn from(value: SymbolIcon) -> Self {
+            Self(value.into())
         }
     }
     impl sealed::LayoutControl for SymbolIcon {
@@ -3248,9 +3221,9 @@ pub mod public {
         }
     }
     impl sealed::Sealed for ImageIcon {}
-    impl sealed::NativeControl for ImageIcon {
-        fn into_element(self) -> Element {
-            self.into()
+    impl From<ImageIcon> for Icon {
+        fn from(value: ImageIcon) -> Self {
+            Self(value.into())
         }
     }
     impl sealed::LayoutControl for ImageIcon {
@@ -3281,9 +3254,9 @@ pub mod public {
         }
     }
     impl sealed::Sealed for FontIcon {}
-    impl sealed::NativeControl for FontIcon {
-        fn into_element(self) -> Element {
-            self.into()
+    impl From<FontIcon> for Icon {
+        fn from(value: FontIcon) -> Self {
+            Self(value.into())
         }
     }
     impl sealed::LayoutControl for FontIcon {
@@ -3329,9 +3302,9 @@ pub mod public {
         }
     }
     impl sealed::Sealed for BitmapIcon {}
-    impl sealed::NativeControl for BitmapIcon {
-        fn into_element(self) -> Element {
-            self.into()
+    impl From<BitmapIcon> for Icon {
+        fn from(value: BitmapIcon) -> Self {
+            Self(value.into())
         }
     }
     impl sealed::LayoutControl for BitmapIcon {
@@ -3362,9 +3335,9 @@ pub mod public {
         }
     }
     impl sealed::Sealed for PathIcon {}
-    impl sealed::NativeControl for PathIcon {
-        fn into_element(self) -> Element {
-            self.into()
+    impl From<PathIcon> for Icon {
+        fn from(value: PathIcon) -> Self {
+            Self(value.into())
         }
     }
     impl sealed::LayoutControl for PathIcon {
@@ -3402,11 +3375,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for ListBoxItem {}
-    impl sealed::NativeControl for ListBoxItem {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for ListBoxItem {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -3472,11 +3440,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for RatingControl {}
-    impl sealed::NativeControl for RatingControl {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl crate::reference::sealed::Sealed for RatingControl {}
     impl crate::reference::ReferenceControl for RatingControl {}
     impl sealed::LayoutControl for RatingControl {
@@ -3491,6 +3454,7 @@ pub mod public {
         is_expanded: Property<bool>,
         on_is_expanded_changed: Option<Callback<bool>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl Expander {
         pub fn new() -> Self {
@@ -3505,34 +3469,30 @@ pub mod public {
             self.on_is_expanded_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for Expander {}
-    impl sealed::NativeControl for Expander {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::ExpanderHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
+        }
+        pub fn content(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::ExpanderContent,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for Expander {}
     impl sealed::LayoutControl for Expander {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for Expander {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum ExpanderSlot {
-        Header,
-        Content,
-    }
-    impl sealed::SlotIndex<ExpanderSlot> for Expander {
-        fn slot_index(slot: ExpanderSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for Expander {
-        type Slot = ExpanderSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct ComboBox {
         items_source: Property<std::rc::Rc<Vec<String>>>,
@@ -3543,6 +3503,7 @@ pub mod public {
         on_selection_changed: Option<Callback<Option<usize>>>,
         reference: Option<NativeElementRef>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl ComboBox {
         pub fn new() -> Self {
@@ -3605,13 +3566,16 @@ pub mod public {
             self.on_selection_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for ComboBox {}
-    impl sealed::NativeControl for ComboBox {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::ComboBoxHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for ComboBox {}
     impl crate::reference::sealed::Sealed for ComboBox {}
     impl crate::reference::ReferenceControl for ComboBox {}
     impl sealed::LayoutControl for ComboBox {
@@ -3621,26 +3585,13 @@ pub mod public {
     }
     impl LayoutControl for ComboBox {}
     impl FocusControl for ComboBox {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum ComboBoxSlot {
-        Header,
-    }
-    impl sealed::SlotIndex<ComboBoxSlot> for ComboBox {
-        fn slot_index(slot: ComboBoxSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for ComboBox {
-        type Slot = ComboBoxSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct Pivot {
         selected_index: Property<Option<usize>>,
         title: Property<String>,
         on_selection_changed: Option<Callback<Option<usize>>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl Pivot {
         pub fn new() -> Self {
@@ -3669,33 +3620,27 @@ pub mod public {
             self.on_selection_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for Pivot {}
-    impl sealed::NativeControl for Pivot {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn items<T>(mut self, children: impl IntoIterator<Item = T>) -> Self
+        where
+            T: Into<KeyedView>,
+        {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::PivotItems,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Into::into).collect(),
+                )),
+            );
+            self
         }
     }
+    impl sealed::Sealed for Pivot {}
     impl sealed::LayoutControl for Pivot {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for Pivot {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum PivotSlot {
-        Items,
-    }
-    impl sealed::SlotIndex<PivotSlot> for Pivot {
-        fn slot_index(slot: PivotSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for Pivot {
-        type Slot = PivotSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct PivotItem {
         header: Property<String>,
@@ -3719,11 +3664,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for PivotItem {}
-    impl sealed::NativeControl for PivotItem {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for PivotItem {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -3744,6 +3684,7 @@ pub mod public {
         selected_index: Property<Option<usize>>,
         on_selection_changed: Option<Callback<Option<usize>>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl FlipView {
         pub fn new() -> Self {
@@ -3761,37 +3702,32 @@ pub mod public {
             self.on_selection_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for FlipView {}
-    impl sealed::NativeControl for FlipView {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn items<T>(mut self, children: impl IntoIterator<Item = T>) -> Self
+        where
+            T: Into<KeyedView>,
+        {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::FlipViewItems,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Into::into).collect(),
+                )),
+            );
+            self
         }
     }
+    impl sealed::Sealed for FlipView {}
     impl sealed::LayoutControl for FlipView {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for FlipView {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum FlipViewSlot {
-        Items,
-    }
-    impl sealed::SlotIndex<FlipViewSlot> for FlipView {
-        fn slot_index(slot: FlipViewSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for FlipView {
-        type Slot = FlipViewSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct SelectorBar {
         on_selected_text_changed: Option<Callback<Option<String>>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl SelectorBar {
         pub fn new() -> Self {
@@ -3804,38 +3740,33 @@ pub mod public {
             self.on_selected_text_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for SelectorBar {}
-    impl sealed::NativeControl for SelectorBar {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn items(
+            mut self,
+            children: impl IntoIterator<Item = Keyed<SelectorBarItemValue>>,
+        ) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::SelectorBarItems,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Keyed::into_keyed_view).collect(),
+                )),
+            );
+            self
         }
     }
+    impl sealed::Sealed for SelectorBar {}
     impl sealed::LayoutControl for SelectorBar {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for SelectorBar {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum SelectorBarSlot {
-        Items,
-    }
-    impl sealed::SlotIndex<SelectorBarSlot> for SelectorBar {
-        fn slot_index(slot: SelectorBarSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for SelectorBar {
-        type Slot = SelectorBarSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct SelectorBarItem {
         text: Property<String>,
         is_selected: Property<bool>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl SelectorBarItem {
         pub fn new() -> Self {
@@ -3857,33 +3788,22 @@ pub mod public {
             self.is_selected = Property::from(value);
             self
         }
-    }
-    impl sealed::Sealed for SelectorBarItem {}
-    impl sealed::NativeControl for SelectorBarItem {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::SelectorBarItemIcon,
+                SlotContent::Single(icon.into().into_view()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for SelectorBarItem {}
     impl sealed::LayoutControl for SelectorBarItem {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for SelectorBarItem {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum SelectorBarItemSlot {
-        Icon,
-    }
-    impl sealed::SlotIndex<SelectorBarItemSlot> for SelectorBarItem {
-        fn slot_index(slot: SelectorBarItemSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for SelectorBarItem {
-        type Slot = SelectorBarItemSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct TabView {
         selected_index: Property<Option<usize>>,
@@ -3891,6 +3811,7 @@ pub mod public {
         is_add_tab_button_visible: Property<bool>,
         events: Option<std::rc::Rc<TabViewEvents>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl TabView {
         pub fn new() -> Self {
@@ -3946,33 +3867,27 @@ pub mod public {
             .on_reordered = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for TabView {}
-    impl sealed::NativeControl for TabView {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn tab_items<T>(mut self, children: impl IntoIterator<Item = T>) -> Self
+        where
+            T: Into<KeyedView>,
+        {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::TabViewTabItems,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Into::into).collect(),
+                )),
+            );
+            self
         }
     }
+    impl sealed::Sealed for TabView {}
     impl sealed::LayoutControl for TabView {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for TabView {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum TabViewSlot {
-        TabItems,
-    }
-    impl sealed::SlotIndex<TabViewSlot> for TabView {
-        fn slot_index(slot: TabViewSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for TabView {
-        type Slot = TabViewSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct TabViewItem {
         header: Property<String>,
@@ -4014,11 +3929,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for TabViewItem {}
-    impl sealed::NativeControl for TabViewItem {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for TabViewItem {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -4130,11 +4040,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for TeachingTip {}
-    impl sealed::NativeControl for TeachingTip {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for TeachingTip {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -4163,11 +4068,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for DropDownButton {}
-    impl sealed::NativeControl for DropDownButton {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for DropDownButton {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -4186,45 +4086,53 @@ pub mod public {
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct CommandBar {
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl CommandBar {
         pub fn new() -> Self {
             Self::default()
         }
-    }
-    impl sealed::Sealed for CommandBar {}
-    impl sealed::NativeControl for CommandBar {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn primary_commands(
+            mut self,
+            children: impl IntoIterator<Item = Keyed<CommandBarElement>>,
+        ) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::CommandBarPrimaryCommands,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Keyed::into_keyed_view).collect(),
+                )),
+            );
+            self
+        }
+        pub fn secondary_commands(
+            mut self,
+            children: impl IntoIterator<Item = Keyed<CommandBarElement>>,
+        ) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::CommandBarSecondaryCommands,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Keyed::into_keyed_view).collect(),
+                )),
+            );
+            self
         }
     }
+    impl sealed::Sealed for CommandBar {}
     impl sealed::LayoutControl for CommandBar {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for CommandBar {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum CommandBarSlot {
-        PrimaryCommands,
-        SecondaryCommands,
-    }
-    impl sealed::SlotIndex<CommandBarSlot> for CommandBar {
-        fn slot_index(slot: CommandBarSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for CommandBar {
-        type Slot = CommandBarSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct AppBarButton {
         label: Property<String>,
         is_enabled: Property<bool>,
         on_click: Option<Callback<()>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl AppBarButton {
         pub fn new() -> Self {
@@ -4250,33 +4158,22 @@ pub mod public {
             self.on_click = Some(callback.into_unit_callback());
             self
         }
-    }
-    impl sealed::Sealed for AppBarButton {}
-    impl sealed::NativeControl for AppBarButton {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::AppBarButtonIcon,
+                SlotContent::Single(icon.into().into_view()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for AppBarButton {}
     impl sealed::LayoutControl for AppBarButton {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for AppBarButton {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum AppBarButtonSlot {
-        Icon,
-    }
-    impl sealed::SlotIndex<AppBarButtonSlot> for AppBarButton {
-        fn slot_index(slot: AppBarButtonSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for AppBarButton {
-        type Slot = AppBarButtonSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct AppBarSeparator {
         element_state: Option<std::rc::Rc<ElementState>>,
@@ -4287,11 +4184,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for AppBarSeparator {}
-    impl sealed::NativeControl for AppBarSeparator {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for AppBarSeparator {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -4301,38 +4193,33 @@ pub mod public {
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct MenuBar {
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl MenuBar {
         pub fn new() -> Self {
             Self::default()
         }
-    }
-    impl sealed::Sealed for MenuBar {}
-    impl sealed::NativeControl for MenuBar {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn items(
+            mut self,
+            children: impl IntoIterator<Item = Keyed<MenuBarItemValue>>,
+        ) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::MenuBarItems,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Keyed::into_keyed_view).collect(),
+                )),
+            );
+            self
         }
     }
+    impl sealed::Sealed for MenuBar {}
     impl sealed::LayoutControl for MenuBar {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for MenuBar {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum MenuBarSlot {
-        Items,
-    }
-    impl sealed::SlotIndex<MenuBarSlot> for MenuBar {
-        fn slot_index(slot: MenuBarSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for MenuBar {
-        type Slot = MenuBarSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct MenuBarItem {
         title: Property<String>,
@@ -4355,11 +4242,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for MenuBarItem {}
-    impl sealed::NativeControl for MenuBarItem {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for MenuBarItem {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -4388,11 +4270,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for SplitButton {}
-    impl sealed::NativeControl for SplitButton {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for SplitButton {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -4462,11 +4339,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for ColorPicker {}
-    impl sealed::NativeControl for ColorPicker {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for ColorPicker {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -4481,6 +4353,7 @@ pub mod public {
         is_enabled: Property<bool>,
         on_selected_date_changed: Option<Callback<Option<windows_time::DateTime>>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl DatePicker {
         pub fn new() -> Self {
@@ -4513,33 +4386,22 @@ pub mod public {
             self.on_selected_date_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for DatePicker {}
-    impl sealed::NativeControl for DatePicker {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::DatePickerHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for DatePicker {}
     impl sealed::LayoutControl for DatePicker {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for DatePicker {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum DatePickerSlot {
-        Header,
-    }
-    impl sealed::SlotIndex<DatePickerSlot> for DatePicker {
-        fn slot_index(slot: DatePickerSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for DatePicker {
-        type Slot = DatePickerSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct TimePicker {
         clock_identifier: Property<String>,
@@ -4547,6 +4409,7 @@ pub mod public {
         is_enabled: Property<bool>,
         on_selected_time_changed: Option<Callback<Option<windows_time::TimeSpan>>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl TimePicker {
         pub fn new() -> Self {
@@ -4584,33 +4447,22 @@ pub mod public {
             self.on_selected_time_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for TimePicker {}
-    impl sealed::NativeControl for TimePicker {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::TimePickerHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for TimePicker {}
     impl sealed::LayoutControl for TimePicker {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for TimePicker {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum TimePickerSlot {
-        Header,
-    }
-    impl sealed::SlotIndex<TimePickerSlot> for TimePicker {
-        fn slot_index(slot: TimePickerSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for TimePicker {
-        type Slot = TimePickerSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct CalendarDatePicker {
         placeholder_text: Property<String>,
@@ -4619,6 +4471,7 @@ pub mod public {
         is_enabled: Property<bool>,
         on_date_changed: Option<Callback<Option<windows_time::DateTime>>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl CalendarDatePicker {
         pub fn new() -> Self {
@@ -4657,33 +4510,22 @@ pub mod public {
             self.on_date_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for CalendarDatePicker {}
-    impl sealed::NativeControl for CalendarDatePicker {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::CalendarDatePickerHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for CalendarDatePicker {}
     impl sealed::LayoutControl for CalendarDatePicker {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for CalendarDatePicker {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum CalendarDatePickerSlot {
-        Header,
-    }
-    impl sealed::SlotIndex<CalendarDatePickerSlot> for CalendarDatePicker {
-        fn slot_index(slot: CalendarDatePickerSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for CalendarDatePicker {
-        type Slot = CalendarDatePickerSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub(crate) struct ToolTip {
         content: Option<Box<Element>>,
@@ -4694,11 +4536,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for ToolTip {}
-    impl sealed::NativeControl for ToolTip {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::ContentControl for ToolTip {}
     impl ContentControl for ToolTip {}
     #[cfg(test)]
@@ -4791,11 +4628,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for ContentDialog {}
-    impl sealed::NativeControl for ContentDialog {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::ContentControl for ContentDialog {
         fn into_content_view(self, content: View) -> View {
             let open = self.is_open;
@@ -4843,11 +4675,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for CalendarView {}
-    impl sealed::NativeControl for CalendarView {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for CalendarView {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -4863,6 +4690,7 @@ pub mod public {
         allow_drop: Property<bool>,
         events: Option<std::rc::Rc<ListViewEvents>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl ListView {
         pub fn new() -> Self {
@@ -4912,33 +4740,27 @@ pub mod public {
             .on_reordered = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for ListView {}
-    impl sealed::NativeControl for ListView {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn items<T>(mut self, children: impl IntoIterator<Item = T>) -> Self
+        where
+            T: Into<KeyedView>,
+        {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::ListViewItems,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Into::into).collect(),
+                )),
+            );
+            self
         }
     }
+    impl sealed::Sealed for ListView {}
     impl sealed::LayoutControl for ListView {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for ListView {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum ListViewSlot {
-        Items,
-    }
-    impl sealed::SlotIndex<ListViewSlot> for ListView {
-        fn slot_index(slot: ListViewSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for ListView {
-        type Slot = ListViewSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct ListViewItem {
         tag: Property<String>,
@@ -4962,11 +4784,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for ListViewItem {}
-    impl sealed::NativeControl for ListViewItem {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for ListViewItem {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -5003,11 +4820,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for TreeView {}
-    impl sealed::NativeControl for TreeView {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for TreeView {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -5022,6 +4834,7 @@ pub mod public {
         allow_drop: Property<bool>,
         events: Option<std::rc::Rc<GridViewEvents>>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl GridView {
         pub fn new() -> Self {
@@ -5066,33 +4879,27 @@ pub mod public {
             .on_selection_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for GridView {}
-    impl sealed::NativeControl for GridView {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn items<T>(mut self, children: impl IntoIterator<Item = T>) -> Self
+        where
+            T: Into<KeyedView>,
+        {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::GridViewItems,
+                SlotContent::Collection(std::rc::Rc::new(
+                    children.into_iter().map(Into::into).collect(),
+                )),
+            );
+            self
         }
     }
+    impl sealed::Sealed for GridView {}
     impl sealed::LayoutControl for GridView {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for GridView {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum GridViewSlot {
-        Items,
-    }
-    impl sealed::SlotIndex<GridViewSlot> for GridView {
-        fn slot_index(slot: GridViewSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for GridView {
-        type Slot = GridViewSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct GridViewItem {
         tag: Property<String>,
@@ -5116,11 +4923,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for GridViewItem {}
-    impl sealed::NativeControl for GridViewItem {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for GridViewItem {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -5147,11 +4949,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for RelativePanel {}
-    impl sealed::NativeControl for RelativePanel {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for RelativePanel {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -5181,11 +4978,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for Canvas {}
-    impl sealed::NativeControl for Canvas {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for Canvas {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -5213,6 +5005,7 @@ pub mod public {
         on_text_changed: Option<Callback<String>>,
         reference: Option<NativeElementRef>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl RichEditBox {
         pub fn new() -> Self {
@@ -5223,14 +5016,14 @@ pub mod public {
             self
         }
         pub fn text(mut self, value: impl Into<String>) -> Self {
-            self.text = Property::Set(value.into());
+            self.text = Property::Set(canonical_rich_edit_text(&value.into()));
             self
         }
         pub fn text_optional<T>(mut self, value: Option<T>) -> Self
         where
             T: Into<String>,
         {
-            self.text = Property::from(value.map(Into::into));
+            self.text = Property::from(value.map(|value| canonical_rich_edit_text(&value.into())));
             self
         }
         pub fn placeholder_text(mut self, value: impl Into<String>) -> Self {
@@ -5258,13 +5051,16 @@ pub mod public {
             self.on_text_changed = Some(callback.into_payload_callback());
             self
         }
-    }
-    impl sealed::Sealed for RichEditBox {}
-    impl sealed::NativeControl for RichEditBox {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn header(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::RichEditBoxHeader,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for RichEditBox {}
     impl crate::reference::sealed::Sealed for RichEditBox {}
     impl crate::reference::ReferenceControl for RichEditBox {}
     impl sealed::LayoutControl for RichEditBox {
@@ -5274,20 +5070,6 @@ pub mod public {
     }
     impl LayoutControl for RichEditBox {}
     impl FocusControl for RichEditBox {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum RichEditBoxSlot {
-        Header,
-    }
-    impl sealed::SlotIndex<RichEditBoxSlot> for RichEditBox {
-        fn slot_index(slot: RichEditBoxSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for RichEditBox {
-        type Slot = RichEditBoxSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct RichTextBlock {
         paragraphs: Property<RichText>,
@@ -5328,11 +5110,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for RichTextBlock {}
-    impl sealed::NativeControl for RichTextBlock {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl sealed::LayoutControl for RichTextBlock {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
@@ -5343,6 +5120,7 @@ pub mod public {
     pub struct Viewbox {
         stretch: Property<Stretch>,
         element_state: Option<std::rc::Rc<ElementState>>,
+        slots: Option<std::rc::Rc<Vec<SlottedView>>>,
     }
     impl Viewbox {
         pub fn new() -> Self {
@@ -5353,33 +5131,22 @@ pub mod public {
             self.stretch = Property::from(value);
             self
         }
-    }
-    impl sealed::Sealed for Viewbox {}
-    impl sealed::NativeControl for Viewbox {
-        fn into_element(self) -> Element {
-            self.into()
+        pub fn child(mut self, view: impl Into<View>) -> Self {
+            set_control_slot(
+                &mut self.slots,
+                SlotId::ViewboxChild,
+                SlotContent::Single(view.into()),
+            );
+            self
         }
     }
+    impl sealed::Sealed for Viewbox {}
     impl sealed::LayoutControl for Viewbox {
         fn element_state_mut(&mut self) -> &mut Option<std::rc::Rc<ElementState>> {
             &mut self.element_state
         }
     }
     impl LayoutControl for Viewbox {}
-    #[non_exhaustive]
-    #[repr(u8)]
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-    pub enum ViewboxSlot {
-        Child,
-    }
-    impl sealed::SlotIndex<ViewboxSlot> for Viewbox {
-        fn slot_index(slot: ViewboxSlot) -> u8 {
-            slot as u8
-        }
-    }
-    impl SlotsControl for Viewbox {
-        type Slot = ViewboxSlot;
-    }
     #[derive(Clone, Debug, Default, PartialEq)]
     pub struct WebView2 {
         reference: Option<NativeElementRef>,
@@ -5395,11 +5162,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for WebView2 {}
-    impl sealed::NativeControl for WebView2 {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl crate::reference::sealed::Sealed for WebView2 {}
     impl crate::reference::ReferenceControl for WebView2 {}
     impl sealed::LayoutControl for WebView2 {
@@ -5423,11 +5185,6 @@ pub mod public {
         }
     }
     impl sealed::Sealed for SwapChainPanel {}
-    impl sealed::NativeControl for SwapChainPanel {
-        fn into_element(self) -> Element {
-            self.into()
-        }
-    }
     impl crate::reference::sealed::Sealed for SwapChainPanel {}
     impl crate::reference::ReferenceControl for SwapChainPanel {}
     impl sealed::LayoutControl for SwapChainPanel {
@@ -5615,7 +5372,11 @@ pub mod public {
     }
     impl From<TextBox> for View {
         fn from(value: TextBox) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<AutoSuggestBox> for Element {
@@ -5625,7 +5386,11 @@ pub mod public {
     }
     impl From<AutoSuggestBox> for View {
         fn from(value: AutoSuggestBox) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<PasswordBox> for Element {
@@ -5635,7 +5400,11 @@ pub mod public {
     }
     impl From<PasswordBox> for View {
         fn from(value: PasswordBox) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<NumberBox> for Element {
@@ -5645,7 +5414,11 @@ pub mod public {
     }
     impl From<NumberBox> for View {
         fn from(value: NumberBox) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<Slider> for Element {
@@ -5655,7 +5428,11 @@ pub mod public {
     }
     impl From<Slider> for View {
         fn from(value: Slider) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<TitleBar> for Element {
@@ -5665,7 +5442,12 @@ pub mod public {
     }
     impl From<TitleBar> for View {
         fn from(value: TitleBar) -> Self {
-            Self::native(value)
+            let mut value = value;
+            let slots = value
+                .slots
+                .take()
+                .unwrap_or_else(|| std::rc::Rc::new(Vec::new()));
+            Self::slotted(value.into(), slots)
         }
     }
     impl From<NavigationView> for Element {
@@ -5675,7 +5457,11 @@ pub mod public {
     }
     impl From<NavigationView> for View {
         fn from(value: NavigationView) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<NavigationViewItem> for Element {
@@ -5685,7 +5471,11 @@ pub mod public {
     }
     impl From<NavigationViewItem> for View {
         fn from(value: NavigationViewItem) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<SplitView> for Element {
@@ -5695,7 +5485,11 @@ pub mod public {
     }
     impl From<SplitView> for View {
         fn from(value: SplitView) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<ProgressBar> for Element {
@@ -5715,7 +5509,11 @@ pub mod public {
     }
     impl From<ToggleSwitch> for View {
         fn from(value: ToggleSwitch) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<CheckBox> for Element {
@@ -5755,7 +5553,11 @@ pub mod public {
     }
     impl From<RadioButtons> for View {
         fn from(value: RadioButtons) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<ItemsRepeater> for Element {
@@ -5845,7 +5647,11 @@ pub mod public {
     }
     impl From<ListBox> for View {
         fn from(value: ListBox) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<Rectangle> for Element {
@@ -5955,7 +5761,11 @@ pub mod public {
     }
     impl From<Expander> for View {
         fn from(value: Expander) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<ComboBox> for Element {
@@ -5965,7 +5775,11 @@ pub mod public {
     }
     impl From<ComboBox> for View {
         fn from(value: ComboBox) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<Pivot> for Element {
@@ -5975,7 +5789,11 @@ pub mod public {
     }
     impl From<Pivot> for View {
         fn from(value: Pivot) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<PivotItem> for Element {
@@ -5995,7 +5813,11 @@ pub mod public {
     }
     impl From<FlipView> for View {
         fn from(value: FlipView) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<SelectorBar> for Element {
@@ -6005,7 +5827,11 @@ pub mod public {
     }
     impl From<SelectorBar> for View {
         fn from(value: SelectorBar) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<SelectorBarItem> for Element {
@@ -6015,7 +5841,11 @@ pub mod public {
     }
     impl From<SelectorBarItem> for View {
         fn from(value: SelectorBarItem) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<TabView> for Element {
@@ -6025,7 +5855,11 @@ pub mod public {
     }
     impl From<TabView> for View {
         fn from(value: TabView) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<TabViewItem> for Element {
@@ -6065,7 +5899,11 @@ pub mod public {
     }
     impl From<CommandBar> for View {
         fn from(value: CommandBar) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<AppBarButton> for Element {
@@ -6075,7 +5913,11 @@ pub mod public {
     }
     impl From<AppBarButton> for View {
         fn from(value: AppBarButton) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<AppBarSeparator> for Element {
@@ -6095,7 +5937,11 @@ pub mod public {
     }
     impl From<MenuBar> for View {
         fn from(value: MenuBar) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<MenuBarItem> for Element {
@@ -6135,7 +5981,11 @@ pub mod public {
     }
     impl From<DatePicker> for View {
         fn from(value: DatePicker) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<TimePicker> for Element {
@@ -6145,7 +5995,11 @@ pub mod public {
     }
     impl From<TimePicker> for View {
         fn from(value: TimePicker) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<CalendarDatePicker> for Element {
@@ -6155,7 +6009,11 @@ pub mod public {
     }
     impl From<CalendarDatePicker> for View {
         fn from(value: CalendarDatePicker) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<ToolTip> for Element {
@@ -6196,7 +6054,11 @@ pub mod public {
     }
     impl From<ListView> for View {
         fn from(value: ListView) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<ListViewItem> for Element {
@@ -6226,7 +6088,11 @@ pub mod public {
     }
     impl From<GridView> for View {
         fn from(value: GridView) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<GridViewItem> for Element {
@@ -6266,7 +6132,11 @@ pub mod public {
     }
     impl From<RichEditBox> for View {
         fn from(value: RichEditBox) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<RichTextBlock> for Element {
@@ -6286,7 +6156,11 @@ pub mod public {
     }
     impl From<Viewbox> for View {
         fn from(value: Viewbox) -> Self {
-            Self::native(value)
+            let mut value = value;
+            match value.slots.take() {
+                Some(slots) => Self::slotted(value.into(), slots),
+                None => Self::native(value),
+            }
         }
     }
     impl From<WebView2> for Element {
@@ -6511,6 +6385,8 @@ pub mod public {
                 Self::Border(value) => {
                     let value = std::rc::Rc::unwrap_or_clone(value);
                     let Border {
+                        is_tab_stop,
+                        allow_focus_on_interaction,
                         padding,
                         border_thickness,
                         corner_radius,
@@ -6520,14 +6396,18 @@ pub mod public {
                         scale,
                         scale_transition,
                         capture_pointer_on_press,
+                        focus_on_pointer_release,
                         drop_policy,
                         events,
+                        reference,
                         element_state,
                         content,
                     } = value;
                     ElementParts {
                         kind: MountedKind::Border,
                         props: MountedProps::Border(std::rc::Rc::new(BorderMountedProps {
+                            is_tab_stop,
+                            allow_focus_on_interaction,
                             padding,
                             border_thickness,
                             corner_radius,
@@ -6537,10 +6417,11 @@ pub mod public {
                             scale,
                             scale_transition,
                             capture_pointer_on_press,
+                            focus_on_pointer_release,
                             drop_policy,
                             events,
                         })),
-                        reference: None,
+                        reference,
                         element_state,
                         window_title_bar: None,
                         structure: ElementStructure::Content(content.map(|element| *element)),
@@ -6654,6 +6535,7 @@ pub mod public {
                         on_text_changed,
                         reference,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::TextBox,
@@ -6684,6 +6566,7 @@ pub mod public {
                         events,
                         reference,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::AutoSuggestBox,
@@ -6712,6 +6595,7 @@ pub mod public {
                         on_password_changed,
                         reference,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::PasswordBox,
@@ -6740,6 +6624,7 @@ pub mod public {
                         on_value_changed,
                         reference,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::NumberBox,
@@ -6768,6 +6653,7 @@ pub mod public {
                         on_value_changed,
                         reference,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::Slider,
@@ -6797,6 +6683,7 @@ pub mod public {
                         events,
                         element_state,
                         preferred_height,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::TitleBar,
@@ -6828,6 +6715,7 @@ pub mod public {
                         is_pane_open,
                         events,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::NavigationView,
@@ -6859,6 +6747,7 @@ pub mod public {
                         selects_on_invoked,
                         is_expanded,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::NavigationViewItem,
@@ -6885,6 +6774,7 @@ pub mod public {
                         is_pane_open,
                         on_pane_closed,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::SplitView,
@@ -6940,6 +6830,7 @@ pub mod public {
                         on_toggled,
                         reference,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::ToggleSwitch,
@@ -7039,6 +6930,7 @@ pub mod public {
                         max_columns,
                         on_selection_changed,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::RadioButtons,
@@ -7237,6 +7129,7 @@ pub mod public {
                         is_enabled,
                         on_selected_tag_changed,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::ListBox,
@@ -7463,6 +7356,7 @@ pub mod public {
                         is_expanded,
                         on_is_expanded_changed,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::Expander,
@@ -7487,6 +7381,7 @@ pub mod public {
                         on_selection_changed,
                         reference,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::ComboBox,
@@ -7511,6 +7406,7 @@ pub mod public {
                         title,
                         on_selection_changed,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::Pivot,
@@ -7549,6 +7445,7 @@ pub mod public {
                         selected_index,
                         on_selection_changed,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::FlipView,
@@ -7567,6 +7464,7 @@ pub mod public {
                     let SelectorBar {
                         on_selected_text_changed,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::SelectorBar,
@@ -7587,6 +7485,7 @@ pub mod public {
                         text,
                         is_selected,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::SelectorBarItem,
@@ -7607,6 +7506,7 @@ pub mod public {
                         is_add_tab_button_visible,
                         events,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::TabView,
@@ -7703,7 +7603,10 @@ pub mod public {
                 }
                 Self::CommandBar(value) => {
                     let value = std::rc::Rc::unwrap_or_clone(value);
-                    let CommandBar { element_state } = value;
+                    let CommandBar {
+                        element_state,
+                        slots: _,
+                    } = value;
                     ElementParts {
                         kind: MountedKind::CommandBar,
                         props: MountedProps::CommandBar(std::rc::Rc::new(
@@ -7722,6 +7625,7 @@ pub mod public {
                         is_enabled,
                         on_click,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::AppBarButton,
@@ -7754,7 +7658,10 @@ pub mod public {
                 }
                 Self::MenuBar(value) => {
                     let value = std::rc::Rc::unwrap_or_clone(value);
-                    let MenuBar { element_state } = value;
+                    let MenuBar {
+                        element_state,
+                        slots: _,
+                    } = value;
                     ElementParts {
                         kind: MountedKind::MenuBar,
                         props: MountedProps::MenuBar(std::rc::Rc::new(MenuBarMountedProps {})),
@@ -7843,6 +7750,7 @@ pub mod public {
                         is_enabled,
                         on_selected_date_changed,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::DatePicker,
@@ -7867,6 +7775,7 @@ pub mod public {
                         is_enabled,
                         on_selected_time_changed,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::TimePicker,
@@ -7891,6 +7800,7 @@ pub mod public {
                         is_enabled,
                         on_date_changed,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::CalendarDatePicker,
@@ -7988,6 +7898,7 @@ pub mod public {
                         allow_drop,
                         events,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::ListView,
@@ -8051,6 +7962,7 @@ pub mod public {
                         allow_drop,
                         events,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::GridView,
@@ -8127,6 +8039,7 @@ pub mod public {
                         on_text_changed,
                         reference,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::RichEditBox,
@@ -8175,6 +8088,7 @@ pub mod public {
                     let Viewbox {
                         stretch,
                         element_state,
+                        slots: _,
                     } = value;
                     ElementParts {
                         kind: MountedKind::Viewbox,
@@ -8224,7 +8138,7 @@ pub mod public {
         fn props_match(&self, props: &MountedProps) -> bool {
             match (self, props) {
                 (Self::TextBlock(value), MountedProps::TextBlock(mounted)) => {
-                    true && value.text == mounted.text
+                    value.text == mounted.text
                         && value.text_wrapping == mounted.text_wrapping
                         && f64_property_eq(&value.font_size, &mounted.font_size)
                         && value.font_weight == mounted.font_weight
@@ -8234,7 +8148,7 @@ pub mod public {
                         && value.foreground == mounted.foreground
                 }
                 (Self::Button(value), MountedProps::Button(mounted)) => {
-                    true && value.is_enabled == mounted.is_enabled
+                    value.is_enabled == mounted.is_enabled
                         && value.horizontal_content_alignment
                             == mounted.horizontal_content_alignment
                         && value.vertical_content_alignment == mounted.vertical_content_alignment
@@ -8244,18 +8158,20 @@ pub mod public {
                         && value.on_click == mounted.on_click
                 }
                 (Self::HyperlinkButton(value), MountedProps::HyperlinkButton(mounted)) => {
-                    true && value.navigate_uri == mounted.navigate_uri
+                    value.navigate_uri == mounted.navigate_uri
                         && value.is_enabled == mounted.is_enabled
                         && value.on_click == mounted.on_click
                 }
                 (Self::RepeatButton(value), MountedProps::RepeatButton(mounted)) => {
-                    true && value.delay == mounted.delay
+                    value.delay == mounted.delay
                         && value.interval == mounted.interval
                         && value.is_enabled == mounted.is_enabled
                         && value.on_click == mounted.on_click
                 }
                 (Self::Border(value), MountedProps::Border(mounted)) => {
-                    true && value.padding == mounted.padding
+                    value.is_tab_stop == mounted.is_tab_stop
+                        && value.allow_focus_on_interaction == mounted.allow_focus_on_interaction
+                        && value.padding == mounted.padding
                         && value.border_thickness == mounted.border_thickness
                         && value.corner_radius == mounted.corner_radius
                         && value.background == mounted.background
@@ -8264,27 +8180,28 @@ pub mod public {
                         && f64_property_eq(&value.scale, &mounted.scale)
                         && value.scale_transition == mounted.scale_transition
                         && value.capture_pointer_on_press == mounted.capture_pointer_on_press
+                        && value.focus_on_pointer_release == mounted.focus_on_pointer_release
                         && value.drop_policy == mounted.drop_policy
                         && value.events == mounted.events
                 }
                 (Self::BreadcrumbBar(value), MountedProps::BreadcrumbBar(mounted)) => {
-                    true && value.items_source == mounted.items_source
+                    value.items_source == mounted.items_source
                         && value.on_item_clicked == mounted.on_item_clicked
                 }
                 (Self::StackPanel(value), MountedProps::StackPanel(mounted)) => {
-                    true && value.orientation == mounted.orientation
+                    value.orientation == mounted.orientation
                         && f64_property_eq(&value.spacing, &mounted.spacing)
                 }
                 (
                     Self::VariableSizedWrapGrid(value),
                     MountedProps::VariableSizedWrapGrid(mounted),
                 ) => {
-                    true && f64_property_eq(&value.item_width, &mounted.item_width)
+                    f64_property_eq(&value.item_width, &mounted.item_width)
                         && f64_property_eq(&value.item_height, &mounted.item_height)
                         && value.orientation == mounted.orientation
                 }
                 (Self::Grid(value), MountedProps::Grid(mounted)) => {
-                    true && f64_property_eq(&value.row_spacing, &mounted.row_spacing)
+                    f64_property_eq(&value.row_spacing, &mounted.row_spacing)
                         && f64_property_eq(&value.column_spacing, &mounted.column_spacing)
                         && value.key_accelerators == mounted.key_accelerators
                         && value.background == mounted.background
@@ -8292,7 +8209,7 @@ pub mod public {
                         && value.columns == mounted.columns
                 }
                 (Self::TextBox(value), MountedProps::TextBox(mounted)) => {
-                    true && value.text == mounted.text
+                    value.text == mounted.text
                         && value.placeholder_text == mounted.placeholder_text
                         && value.is_enabled == mounted.is_enabled
                         && value.accepts_return == mounted.accepts_return
@@ -8303,28 +8220,28 @@ pub mod public {
                         && value.on_text_changed == mounted.on_text_changed
                 }
                 (Self::AutoSuggestBox(value), MountedProps::AutoSuggestBox(mounted)) => {
-                    true && value.text == mounted.text
+                    value.text == mounted.text
                         && value.items_source == mounted.items_source
                         && value.placeholder_text == mounted.placeholder_text
                         && value.is_enabled == mounted.is_enabled
                         && value.events == mounted.events
                 }
                 (Self::PasswordBox(value), MountedProps::PasswordBox(mounted)) => {
-                    true && value.password == mounted.password
+                    value.password == mounted.password
                         && value.placeholder_text == mounted.placeholder_text
                         && value.password_reveal_mode == mounted.password_reveal_mode
                         && value.is_enabled == mounted.is_enabled
                         && value.on_password_changed == mounted.on_password_changed
                 }
                 (Self::NumberBox(value), MountedProps::NumberBox(mounted)) => {
-                    true && f64_property_eq(&value.minimum, &mounted.minimum)
+                    f64_property_eq(&value.minimum, &mounted.minimum)
                         && f64_property_eq(&value.maximum, &mounted.maximum)
                         && value.value == mounted.value
                         && value.is_enabled == mounted.is_enabled
                         && value.on_value_changed == mounted.on_value_changed
                 }
                 (Self::Slider(value), MountedProps::Slider(mounted)) => {
-                    true && f64_property_eq(&value.minimum, &mounted.minimum)
+                    f64_property_eq(&value.minimum, &mounted.minimum)
                         && f64_property_eq(&value.maximum, &mounted.maximum)
                         && f64_property_eq(&value.value, &mounted.value)
                         && value.is_enabled == mounted.is_enabled
@@ -8333,7 +8250,7 @@ pub mod public {
                         && value.on_value_changed == mounted.on_value_changed
                 }
                 (Self::TitleBar(value), MountedProps::TitleBar(mounted)) => {
-                    true && value.title == mounted.title
+                    value.title == mounted.title
                         && value.subtitle == mounted.subtitle
                         && value.is_back_button_visible == mounted.is_back_button_visible
                         && value.is_back_button_enabled == mounted.is_back_button_enabled
@@ -8342,7 +8259,7 @@ pub mod public {
                         && value.events == mounted.events
                 }
                 (Self::NavigationView(value), MountedProps::NavigationView(mounted)) => {
-                    true && value.is_enabled == mounted.is_enabled
+                    value.is_enabled == mounted.is_enabled
                         && value.pane_display_mode == mounted.pane_display_mode
                         && value.is_pane_toggle_button_visible
                             == mounted.is_pane_toggle_button_visible
@@ -8355,20 +8272,20 @@ pub mod public {
                         && value.events == mounted.events
                 }
                 (Self::NavigationViewItem(value), MountedProps::NavigationViewItem(mounted)) => {
-                    true && value.tag == mounted.tag
+                    value.tag == mounted.tag
                         && value.is_selected == mounted.is_selected
                         && value.selects_on_invoked == mounted.selects_on_invoked
                         && value.is_expanded == mounted.is_expanded
                 }
                 (Self::SplitView(value), MountedProps::SplitView(mounted)) => {
-                    true && f64_property_eq(&value.open_pane_length, &mounted.open_pane_length)
+                    f64_property_eq(&value.open_pane_length, &mounted.open_pane_length)
                         && f64_property_eq(&value.compact_pane_length, &mounted.compact_pane_length)
                         && value.display_mode == mounted.display_mode
                         && value.is_pane_open == mounted.is_pane_open
                         && value.on_pane_closed == mounted.on_pane_closed
                 }
                 (Self::ProgressBar(value), MountedProps::ProgressBar(mounted)) => {
-                    true && f64_property_eq(&value.minimum, &mounted.minimum)
+                    f64_property_eq(&value.minimum, &mounted.minimum)
                         && f64_property_eq(&value.maximum, &mounted.maximum)
                         && f64_property_eq(&value.value, &mounted.value)
                         && value.is_indeterminate == mounted.is_indeterminate
@@ -8377,38 +8294,38 @@ pub mod public {
                         && value.is_enabled == mounted.is_enabled
                 }
                 (Self::ToggleSwitch(value), MountedProps::ToggleSwitch(mounted)) => {
-                    true && value.is_on == mounted.is_on
+                    value.is_on == mounted.is_on
                         && value.is_enabled == mounted.is_enabled
                         && value.on_toggled == mounted.on_toggled
                 }
                 (Self::CheckBox(value), MountedProps::CheckBox(mounted)) => {
-                    true && value.is_checked == mounted.is_checked
+                    value.is_checked == mounted.is_checked
                         && value.is_enabled == mounted.is_enabled
                         && value.on_is_checked_changed == mounted.on_is_checked_changed
                 }
                 (Self::ToggleButton(value), MountedProps::ToggleButton(mounted)) => {
-                    true && value.is_checked == mounted.is_checked
+                    value.is_checked == mounted.is_checked
                         && value.is_enabled == mounted.is_enabled
                         && value.on_is_checked_changed == mounted.on_is_checked_changed
                 }
                 (Self::RadioButton(value), MountedProps::RadioButton(mounted)) => {
-                    true && value.group_name == mounted.group_name
+                    value.group_name == mounted.group_name
                         && value.is_checked == mounted.is_checked
                         && value.is_enabled == mounted.is_enabled
                         && value.on_checked == mounted.on_checked
                 }
                 (Self::RadioButtons(value), MountedProps::RadioButtons(mounted)) => {
-                    true && value.items_source == mounted.items_source
+                    value.items_source == mounted.items_source
                         && value.selected_index == mounted.selected_index
                         && value.max_columns == mounted.max_columns
                         && value.on_selection_changed == mounted.on_selection_changed
                 }
                 (Self::ItemsRepeater(_), MountedProps::ItemsRepeater(_)) => true,
                 (Self::InfoBadge(value), MountedProps::InfoBadge(mounted)) => {
-                    true && value.value == mounted.value
+                    value.value == mounted.value
                 }
                 (Self::InfoBar(value), MountedProps::InfoBar(mounted)) => {
-                    true && value.title == mounted.title
+                    value.title == mounted.title
                         && value.message == mounted.message
                         && value.severity == mounted.severity
                         && value.is_open == mounted.is_open
@@ -8416,28 +8333,27 @@ pub mod public {
                         && value.on_closed == mounted.on_closed
                 }
                 (Self::PersonPicture(value), MountedProps::PersonPicture(mounted)) => {
-                    true && value.display_name == mounted.display_name
-                        && value.initials == mounted.initials
+                    value.display_name == mounted.display_name && value.initials == mounted.initials
                 }
                 (Self::ScrollViewer(value), MountedProps::ScrollViewer(mounted)) => {
-                    true && value.horizontal_scroll_bar_visibility
+                    value.horizontal_scroll_bar_visibility
                         == mounted.horizontal_scroll_bar_visibility
                         && value.vertical_scroll_bar_visibility
                             == mounted.vertical_scroll_bar_visibility
                 }
                 (Self::ScrollView(value), MountedProps::ScrollView(mounted)) => {
-                    true && value.horizontal_scroll_bar_visibility
+                    value.horizontal_scroll_bar_visibility
                         == mounted.horizontal_scroll_bar_visibility
                         && value.vertical_scroll_bar_visibility
                             == mounted.vertical_scroll_bar_visibility
                 }
                 (Self::Image(value), MountedProps::Image(mounted)) => {
-                    true && value.source == mounted.source
+                    value.source == mounted.source
                         && value.stretch == mounted.stretch
                         && value.events == mounted.events
                 }
                 (Self::ProgressRing(value), MountedProps::ProgressRing(mounted)) => {
-                    true && f64_property_eq(&value.minimum, &mounted.minimum)
+                    f64_property_eq(&value.minimum, &mounted.minimum)
                         && f64_property_eq(&value.maximum, &mounted.maximum)
                         && f64_property_eq(&value.value, &mounted.value)
                         && value.is_indeterminate == mounted.is_indeterminate
@@ -8445,23 +8361,23 @@ pub mod public {
                         && value.is_enabled == mounted.is_enabled
                 }
                 (Self::ListBox(value), MountedProps::ListBox(mounted)) => {
-                    true && value.is_enabled == mounted.is_enabled
+                    value.is_enabled == mounted.is_enabled
                         && value.on_selected_tag_changed == mounted.on_selected_tag_changed
                 }
                 (Self::Rectangle(value), MountedProps::Rectangle(mounted)) => {
-                    true && value.fill == mounted.fill
+                    value.fill == mounted.fill
                         && value.stroke == mounted.stroke
                         && f64_property_eq(&value.stroke_thickness, &mounted.stroke_thickness)
                         && f64_property_eq(&value.radius_x, &mounted.radius_x)
                         && f64_property_eq(&value.radius_y, &mounted.radius_y)
                 }
                 (Self::Ellipse(value), MountedProps::Ellipse(mounted)) => {
-                    true && value.fill == mounted.fill
+                    value.fill == mounted.fill
                         && value.stroke == mounted.stroke
                         && f64_property_eq(&value.stroke_thickness, &mounted.stroke_thickness)
                 }
                 (Self::Line(value), MountedProps::Line(mounted)) => {
-                    true && value.stroke == mounted.stroke
+                    value.stroke == mounted.stroke
                         && f64_property_eq(&value.stroke_thickness, &mounted.stroke_thickness)
                         && f64_property_eq(&value.x1, &mounted.x1)
                         && f64_property_eq(&value.y1, &mounted.y1)
@@ -8469,37 +8385,37 @@ pub mod public {
                         && f64_property_eq(&value.y2, &mounted.y2)
                 }
                 (Self::SymbolIcon(value), MountedProps::SymbolIcon(mounted)) => {
-                    true && value.symbol == mounted.symbol
+                    value.symbol == mounted.symbol
                 }
                 (Self::ImageIcon(value), MountedProps::ImageIcon(mounted)) => {
-                    true && value.source == mounted.source
+                    value.source == mounted.source
                 }
                 (Self::FontIcon(value), MountedProps::FontIcon(mounted)) => {
-                    true && value.glyph == mounted.glyph
+                    value.glyph == mounted.glyph
                 }
                 (Self::BitmapIcon(value), MountedProps::BitmapIcon(mounted)) => {
-                    true && value.uri_source == mounted.uri_source
+                    value.uri_source == mounted.uri_source
                         && value.show_as_monochrome == mounted.show_as_monochrome
                 }
                 (Self::PathIcon(value), MountedProps::PathIcon(mounted)) => {
-                    true && value.data == mounted.data
+                    value.data == mounted.data
                 }
                 (Self::ListBoxItem(value), MountedProps::ListBoxItem(mounted)) => {
-                    true && value.tag == mounted.tag && value.is_selected == mounted.is_selected
+                    value.tag == mounted.tag && value.is_selected == mounted.is_selected
                 }
                 (Self::RatingControl(value), MountedProps::RatingControl(mounted)) => {
-                    true && value.max_rating == mounted.max_rating
+                    value.max_rating == mounted.max_rating
                         && value.value == mounted.value
                         && value.caption == mounted.caption
                         && value.is_read_only == mounted.is_read_only
                         && value.on_value_changed == mounted.on_value_changed
                 }
                 (Self::Expander(value), MountedProps::Expander(mounted)) => {
-                    true && value.is_expanded == mounted.is_expanded
+                    value.is_expanded == mounted.is_expanded
                         && value.on_is_expanded_changed == mounted.on_is_expanded_changed
                 }
                 (Self::ComboBox(value), MountedProps::ComboBox(mounted)) => {
-                    true && value.items_source == mounted.items_source
+                    value.items_source == mounted.items_source
                         && value.selected_index == mounted.selected_index
                         && value.placeholder_text == mounted.placeholder_text
                         && value.is_editable == mounted.is_editable
@@ -8507,36 +8423,36 @@ pub mod public {
                         && value.on_selection_changed == mounted.on_selection_changed
                 }
                 (Self::Pivot(value), MountedProps::Pivot(mounted)) => {
-                    true && value.selected_index == mounted.selected_index
+                    value.selected_index == mounted.selected_index
                         && value.title == mounted.title
                         && value.on_selection_changed == mounted.on_selection_changed
                 }
                 (Self::PivotItem(value), MountedProps::PivotItem(mounted)) => {
-                    true && value.header == mounted.header
+                    value.header == mounted.header
                 }
                 (Self::FlipView(value), MountedProps::FlipView(mounted)) => {
-                    true && value.selected_index == mounted.selected_index
+                    value.selected_index == mounted.selected_index
                         && value.on_selection_changed == mounted.on_selection_changed
                 }
                 (Self::SelectorBar(value), MountedProps::SelectorBar(mounted)) => {
-                    true && value.on_selected_text_changed == mounted.on_selected_text_changed
+                    value.on_selected_text_changed == mounted.on_selected_text_changed
                 }
                 (Self::SelectorBarItem(value), MountedProps::SelectorBarItem(mounted)) => {
-                    true && value.text == mounted.text && value.is_selected == mounted.is_selected
+                    value.text == mounted.text && value.is_selected == mounted.is_selected
                 }
                 (Self::TabView(value), MountedProps::TabView(mounted)) => {
-                    true && value.selected_index == mounted.selected_index
+                    value.selected_index == mounted.selected_index
                         && value.can_reorder_tabs == mounted.can_reorder_tabs
                         && value.is_add_tab_button_visible == mounted.is_add_tab_button_visible
                         && value.events == mounted.events
                 }
                 (Self::TabViewItem(value), MountedProps::TabViewItem(mounted)) => {
-                    true && value.header == mounted.header
+                    value.header == mounted.header
                         && value.is_closable == mounted.is_closable
                         && value.tag == mounted.tag
                 }
                 (Self::TeachingTip(value), MountedProps::TeachingTip(mounted)) => {
-                    true && value.title == mounted.title
+                    value.title == mounted.title
                         && value.subtitle == mounted.subtitle
                         && value.is_open == mounted.is_open
                         && value.is_light_dismiss_enabled == mounted.is_light_dismiss_enabled
@@ -8546,26 +8462,24 @@ pub mod public {
                         && value.events == mounted.events
                 }
                 (Self::DropDownButton(value), MountedProps::DropDownButton(mounted)) => {
-                    true && value.is_enabled == mounted.is_enabled
-                        && value.on_click == mounted.on_click
+                    value.is_enabled == mounted.is_enabled && value.on_click == mounted.on_click
                 }
                 (Self::CommandBar(_), MountedProps::CommandBar(_)) => true,
                 (Self::AppBarButton(value), MountedProps::AppBarButton(mounted)) => {
-                    true && value.label == mounted.label
+                    value.label == mounted.label
                         && value.is_enabled == mounted.is_enabled
                         && value.on_click == mounted.on_click
                 }
                 (Self::AppBarSeparator(_), MountedProps::AppBarSeparator(_)) => true,
                 (Self::MenuBar(_), MountedProps::MenuBar(_)) => true,
                 (Self::MenuBarItem(value), MountedProps::MenuBarItem(mounted)) => {
-                    true && value.title == mounted.title
+                    value.title == mounted.title
                 }
                 (Self::SplitButton(value), MountedProps::SplitButton(mounted)) => {
-                    true && value.is_enabled == mounted.is_enabled
-                        && value.on_click == mounted.on_click
+                    value.is_enabled == mounted.is_enabled && value.on_click == mounted.on_click
                 }
                 (Self::ColorPicker(value), MountedProps::ColorPicker(mounted)) => {
-                    true && value.color == mounted.color
+                    value.color == mounted.color
                         && value.is_alpha_enabled == mounted.is_alpha_enabled
                         && value.is_hex_input_visible == mounted.is_hex_input_visible
                         && value.is_color_slider_visible == mounted.is_color_slider_visible
@@ -8575,20 +8489,20 @@ pub mod public {
                         && value.on_color_changed == mounted.on_color_changed
                 }
                 (Self::DatePicker(value), MountedProps::DatePicker(mounted)) => {
-                    true && value.day_visible == mounted.day_visible
+                    value.day_visible == mounted.day_visible
                         && value.month_visible == mounted.month_visible
                         && value.year_visible == mounted.year_visible
                         && value.is_enabled == mounted.is_enabled
                         && value.on_selected_date_changed == mounted.on_selected_date_changed
                 }
                 (Self::TimePicker(value), MountedProps::TimePicker(mounted)) => {
-                    true && value.clock_identifier == mounted.clock_identifier
+                    value.clock_identifier == mounted.clock_identifier
                         && value.minute_increment == mounted.minute_increment
                         && value.is_enabled == mounted.is_enabled
                         && value.on_selected_time_changed == mounted.on_selected_time_changed
                 }
                 (Self::CalendarDatePicker(value), MountedProps::CalendarDatePicker(mounted)) => {
-                    true && value.placeholder_text == mounted.placeholder_text
+                    value.placeholder_text == mounted.placeholder_text
                         && value.is_today_highlighted == mounted.is_today_highlighted
                         && value.is_calendar_open == mounted.is_calendar_open
                         && value.is_enabled == mounted.is_enabled
@@ -8596,7 +8510,7 @@ pub mod public {
                 }
                 (Self::ToolTip(_), MountedProps::ToolTip(_)) => true,
                 (Self::ContentDialog(value), MountedProps::ContentDialog(mounted)) => {
-                    true && value.title == mounted.title
+                    value.title == mounted.title
                         && value.primary_button_text == mounted.primary_button_text
                         && value.secondary_button_text == mounted.secondary_button_text
                         && value.close_button_text == mounted.close_button_text
@@ -8605,13 +8519,13 @@ pub mod public {
                         && value.on_closed == mounted.on_closed
                 }
                 (Self::CalendarView(value), MountedProps::CalendarView(mounted)) => {
-                    true && value.is_today_highlighted == mounted.is_today_highlighted
+                    value.is_today_highlighted == mounted.is_today_highlighted
                         && value.is_group_label_visible == mounted.is_group_label_visible
                         && value.is_enabled == mounted.is_enabled
                         && value.on_selected_dates_changed == mounted.on_selected_dates_changed
                 }
                 (Self::ListView(value), MountedProps::ListView(mounted)) => {
-                    true && value.selected_index == mounted.selected_index
+                    value.selected_index == mounted.selected_index
                         && value.selection_mode == mounted.selection_mode
                         && value.can_drag_items == mounted.can_drag_items
                         && value.can_reorder_items == mounted.can_reorder_items
@@ -8619,39 +8533,39 @@ pub mod public {
                         && value.events == mounted.events
                 }
                 (Self::ListViewItem(value), MountedProps::ListViewItem(mounted)) => {
-                    true && value.tag == mounted.tag
+                    value.tag == mounted.tag
                 }
                 (Self::TreeView(value), MountedProps::TreeView(mounted)) => {
-                    true && value.selection_mode == mounted.selection_mode
+                    value.selection_mode == mounted.selection_mode
                         && value.on_item_invoked == mounted.on_item_invoked
                 }
                 (Self::GridView(value), MountedProps::GridView(mounted)) => {
-                    true && value.selected_index == mounted.selected_index
+                    value.selected_index == mounted.selected_index
                         && value.can_drag_items == mounted.can_drag_items
                         && value.can_reorder_items == mounted.can_reorder_items
                         && value.allow_drop == mounted.allow_drop
                         && value.events == mounted.events
                 }
                 (Self::GridViewItem(value), MountedProps::GridViewItem(mounted)) => {
-                    true && value.tag == mounted.tag
+                    value.tag == mounted.tag
                 }
                 (Self::RelativePanel(_), MountedProps::RelativePanel(_)) => true,
                 (Self::Canvas(_), MountedProps::Canvas(_)) => true,
                 (Self::RichEditBox(value), MountedProps::RichEditBox(mounted)) => {
-                    true && value.text == mounted.text
+                    value.text == mounted.text
                         && value.placeholder_text == mounted.placeholder_text
                         && value.is_read_only == mounted.is_read_only
                         && value.is_enabled == mounted.is_enabled
                         && value.on_text_changed == mounted.on_text_changed
                 }
                 (Self::RichTextBlock(value), MountedProps::RichTextBlock(mounted)) => {
-                    true && value.paragraphs == mounted.paragraphs
+                    value.paragraphs == mounted.paragraphs
                         && f64_property_eq(&value.font_size, &mounted.font_size)
                         && value.is_text_selection_enabled == mounted.is_text_selection_enabled
                         && value.text_wrapping == mounted.text_wrapping
                 }
                 (Self::Viewbox(value), MountedProps::Viewbox(mounted)) => {
-                    true && value.stretch == mounted.stretch
+                    value.stretch == mounted.stretch
                 }
                 (Self::WebView2(_), MountedProps::WebView2(_)) => true,
                 (Self::SwapChainPanel(_), MountedProps::SwapChainPanel(_)) => true,
@@ -8664,7 +8578,7 @@ pub mod public {
                 Self::Button(value) => value.reference.as_ref(),
                 Self::HyperlinkButton(value) => value.reference.as_ref(),
                 Self::RepeatButton(_) => None,
-                Self::Border(_) => None,
+                Self::Border(value) => value.reference.as_ref(),
                 Self::BreadcrumbBar(_) => None,
                 Self::StackPanel(_) => None,
                 Self::VariableSizedWrapGrid(_) => None,
@@ -9077,7 +8991,9 @@ pub mod public {
                         value
                             .events
                             .as_ref()
-                            .is_some_and(|events| events.on_pointer_released.is_some()),
+                            .is_some_and(|events| events.on_pointer_released.is_some())
+                            || !matches!(value.capture_pointer_on_press, Property::Inherited)
+                            || !matches!(value.focus_on_pointer_release, Property::Inherited),
                     );
                     visit(
                         EventId::BorderPointerCaptureLost,
@@ -9092,6 +9008,41 @@ pub mod public {
                             .events
                             .as_ref()
                             .is_some_and(|events| events.on_pointer_canceled.is_some()),
+                    );
+                    visit(
+                        EventId::BorderPreviewKeyDown,
+                        value
+                            .events
+                            .as_ref()
+                            .is_some_and(|events| events.on_preview_key_down.is_some()),
+                    );
+                    visit(
+                        EventId::BorderKeyUp,
+                        value
+                            .events
+                            .as_ref()
+                            .is_some_and(|events| events.on_key_up.is_some()),
+                    );
+                    visit(
+                        EventId::BorderCharacterReceived,
+                        value
+                            .events
+                            .as_ref()
+                            .is_some_and(|events| events.on_character_received.is_some()),
+                    );
+                    visit(
+                        EventId::BorderGotFocus,
+                        value
+                            .events
+                            .as_ref()
+                            .is_some_and(|events| events.on_got_focus.is_some()),
+                    );
+                    visit(
+                        EventId::BorderLostFocus,
+                        value
+                            .events
+                            .as_ref()
+                            .is_some_and(|events| events.on_lost_focus.is_some()),
                     );
                 }
                 Self::BreadcrumbBar(value) => {
@@ -9373,6 +9324,7 @@ pub trait MountedPropsExt {
 pub trait MountedEventsExt {
     fn visit_events(&self, visit: &mut dyn FnMut(EventId, bool));
     fn dispatch_event(&self, event: EventId, payload: &EventPayload) -> Option<bool>;
+    fn routed_callback(&self, event: EventId) -> Option<RoutedEventCallback>;
     fn observe_event(
         &self,
         event: EventId,
@@ -9527,6 +9479,20 @@ impl MountedPropsExt for MountedProps {
             }
             Self::Border(values) => {
                 visit(
+                    PropertyId::BorderIsTabStop,
+                    match &values.is_tab_stop {
+                        Property::Inherited => None,
+                        Property::Set(value) => Some(PropertyValueRef::Bool(*value)),
+                    },
+                );
+                visit(
+                    PropertyId::BorderAllowFocusOnInteraction,
+                    match &values.allow_focus_on_interaction {
+                        Property::Inherited => None,
+                        Property::Set(value) => Some(PropertyValueRef::Bool(*value)),
+                    },
+                );
+                visit(
                     PropertyId::BorderPadding,
                     match &values.padding {
                         Property::Inherited => None,
@@ -9594,10 +9560,19 @@ impl MountedPropsExt for MountedProps {
                     },
                 );
                 visit(
+                    PropertyId::BorderFocusOnPointerRelease,
+                    match &values.focus_on_pointer_release {
+                        Property::Inherited => None,
+                        Property::Set(value) => Some(PropertyValueRef::Bool(*value)),
+                    },
+                );
+                visit(
                     PropertyId::BorderAllowDrop,
                     match &values.drop_policy {
                         Property::Inherited => None,
-                        Property::Set(value) => Some(PropertyValueRef::DragDropPolicy(value)),
+                        Property::Set(value) => {
+                            Some(PropertyValueRef::DragDropPolicy(value.as_ref()))
+                        }
                     },
                 );
             }
@@ -11395,7 +11370,9 @@ impl MountedEventsExt for MountedProps {
                     values
                         .events
                         .as_ref()
-                        .is_some_and(|events| events.on_pointer_released.is_some()),
+                        .is_some_and(|events| events.on_pointer_released.is_some())
+                        || !matches!(values.capture_pointer_on_press, Property::Inherited)
+                        || !matches!(values.focus_on_pointer_release, Property::Inherited),
                 );
                 visit(
                     EventId::BorderPointerCaptureLost,
@@ -11410,6 +11387,41 @@ impl MountedEventsExt for MountedProps {
                         .events
                         .as_ref()
                         .is_some_and(|events| events.on_pointer_canceled.is_some()),
+                );
+                visit(
+                    EventId::BorderPreviewKeyDown,
+                    values
+                        .events
+                        .as_ref()
+                        .is_some_and(|events| events.on_preview_key_down.is_some()),
+                );
+                visit(
+                    EventId::BorderKeyUp,
+                    values
+                        .events
+                        .as_ref()
+                        .is_some_and(|events| events.on_key_up.is_some()),
+                );
+                visit(
+                    EventId::BorderCharacterReceived,
+                    values
+                        .events
+                        .as_ref()
+                        .is_some_and(|events| events.on_character_received.is_some()),
+                );
+                visit(
+                    EventId::BorderGotFocus,
+                    values
+                        .events
+                        .as_ref()
+                        .is_some_and(|events| events.on_got_focus.is_some()),
+                );
+                visit(
+                    EventId::BorderLostFocus,
+                    values
+                        .events
+                        .as_ref()
+                        .is_some_and(|events| events.on_lost_focus.is_some()),
                 );
             }
             Self::BreadcrumbBar(values) => {
@@ -11761,6 +11773,24 @@ impl MountedEventsExt for MountedProps {
                 .as_ref()
                 .and_then(|events| events.on_pointer_canceled.as_ref())
                 .map(|callback| callback.call(())),
+            (
+                Self::Border(values),
+                EventId::BorderGotFocus,
+                EventPayload::FocusEventInfo(value),
+            ) => values
+                .events
+                .as_ref()
+                .and_then(|events| events.on_got_focus.as_ref())
+                .map(|callback| callback.call(*value)),
+            (
+                Self::Border(values),
+                EventId::BorderLostFocus,
+                EventPayload::FocusEventInfo(value),
+            ) => values
+                .events
+                .as_ref()
+                .and_then(|events| events.on_lost_focus.as_ref())
+                .map(|callback| callback.call(*value)),
             (
                 Self::BreadcrumbBar(values),
                 EventId::BreadcrumbBarItemClicked,
@@ -12123,6 +12153,26 @@ impl MountedEventsExt for MountedProps {
             _ => None,
         }
     }
+    fn routed_callback(&self, event: EventId) -> Option<RoutedEventCallback> {
+        match (self, event) {
+            (Self::Border(values), EventId::BorderPreviewKeyDown) => values
+                .events
+                .as_ref()
+                .and_then(|events| events.on_preview_key_down.clone())
+                .map(RoutedEventCallback::KeyEventInfo),
+            (Self::Border(values), EventId::BorderKeyUp) => values
+                .events
+                .as_ref()
+                .and_then(|events| events.on_key_up.clone())
+                .map(RoutedEventCallback::KeyEventInfo),
+            (Self::Border(values), EventId::BorderCharacterReceived) => values
+                .events
+                .as_ref()
+                .and_then(|events| events.on_character_received.clone())
+                .map(RoutedEventCallback::CharacterEventInfo),
+            _ => None,
+        }
+    }
     fn observe_event(
         &self,
         event: EventId,
@@ -12323,6 +12373,7 @@ pub enum SlotId {
     NavigationViewPaneCustomContent,
     NavigationViewPaneFooter,
     NavigationViewMenuItems,
+    NavigationViewFooterMenuItems,
     NavigationViewItemContent,
     NavigationViewItemIcon,
     NavigationViewItemMenuItems,
@@ -12353,150 +12404,8 @@ pub enum SlotId {
     RichEditBoxHeader,
     ViewboxChild,
 }
-pub fn slot_id(kind: MountedKind, index: u8) -> Option<SlotId> {
-    match kind {
-        MountedKind::TextBox => match index {
-            0u8 => Some(SlotId::TextBoxHeader),
-            _ => None,
-        },
-        MountedKind::AutoSuggestBox => match index {
-            0u8 => Some(SlotId::AutoSuggestBoxHeader),
-            _ => None,
-        },
-        MountedKind::PasswordBox => match index {
-            0u8 => Some(SlotId::PasswordBoxHeader),
-            _ => None,
-        },
-        MountedKind::NumberBox => match index {
-            0u8 => Some(SlotId::NumberBoxHeader),
-            _ => None,
-        },
-        MountedKind::Slider => match index {
-            0u8 => Some(SlotId::SliderHeader),
-            _ => None,
-        },
-        MountedKind::TitleBar => match index {
-            0u8 => Some(SlotId::TitleBarContent),
-            1u8 => Some(SlotId::TitleBarRightHeader),
-            _ => None,
-        },
-        MountedKind::NavigationView => match index {
-            0u8 => Some(SlotId::NavigationViewContent),
-            1u8 => Some(SlotId::NavigationViewHeader),
-            2u8 => Some(SlotId::NavigationViewPaneCustomContent),
-            3u8 => Some(SlotId::NavigationViewPaneFooter),
-            4u8 => Some(SlotId::NavigationViewMenuItems),
-            _ => None,
-        },
-        MountedKind::NavigationViewItem => match index {
-            0u8 => Some(SlotId::NavigationViewItemContent),
-            1u8 => Some(SlotId::NavigationViewItemIcon),
-            2u8 => Some(SlotId::NavigationViewItemMenuItems),
-            _ => None,
-        },
-        MountedKind::SplitView => match index {
-            0u8 => Some(SlotId::SplitViewPane),
-            1u8 => Some(SlotId::SplitViewContent),
-            _ => None,
-        },
-        MountedKind::ToggleSwitch => match index {
-            0u8 => Some(SlotId::ToggleSwitchHeader),
-            1u8 => Some(SlotId::ToggleSwitchOnContent),
-            2u8 => Some(SlotId::ToggleSwitchOffContent),
-            _ => None,
-        },
-        MountedKind::RadioButtons => match index {
-            0u8 => Some(SlotId::RadioButtonsHeader),
-            _ => None,
-        },
-        MountedKind::ListBox => match index {
-            0u8 => Some(SlotId::ListBoxItems),
-            _ => None,
-        },
-        MountedKind::Expander => match index {
-            0u8 => Some(SlotId::ExpanderHeader),
-            1u8 => Some(SlotId::ExpanderContent),
-            _ => None,
-        },
-        MountedKind::ComboBox => match index {
-            0u8 => Some(SlotId::ComboBoxHeader),
-            _ => None,
-        },
-        MountedKind::Pivot => match index {
-            0u8 => Some(SlotId::PivotItems),
-            _ => None,
-        },
-        MountedKind::FlipView => match index {
-            0u8 => Some(SlotId::FlipViewItems),
-            _ => None,
-        },
-        MountedKind::SelectorBar => match index {
-            0u8 => Some(SlotId::SelectorBarItems),
-            _ => None,
-        },
-        MountedKind::SelectorBarItem => match index {
-            0u8 => Some(SlotId::SelectorBarItemIcon),
-            _ => None,
-        },
-        MountedKind::TabView => match index {
-            0u8 => Some(SlotId::TabViewTabItems),
-            _ => None,
-        },
-        MountedKind::CommandBar => match index {
-            0u8 => Some(SlotId::CommandBarPrimaryCommands),
-            1u8 => Some(SlotId::CommandBarSecondaryCommands),
-            _ => None,
-        },
-        MountedKind::AppBarButton => match index {
-            0u8 => Some(SlotId::AppBarButtonIcon),
-            _ => None,
-        },
-        MountedKind::MenuBar => match index {
-            0u8 => Some(SlotId::MenuBarItems),
-            _ => None,
-        },
-        MountedKind::DatePicker => match index {
-            0u8 => Some(SlotId::DatePickerHeader),
-            _ => None,
-        },
-        MountedKind::TimePicker => match index {
-            0u8 => Some(SlotId::TimePickerHeader),
-            _ => None,
-        },
-        MountedKind::CalendarDatePicker => match index {
-            0u8 => Some(SlotId::CalendarDatePickerHeader),
-            _ => None,
-        },
-        MountedKind::ListView => match index {
-            0u8 => Some(SlotId::ListViewItems),
-            _ => None,
-        },
-        MountedKind::GridView => match index {
-            0u8 => Some(SlotId::GridViewItems),
-            _ => None,
-        },
-        MountedKind::RichEditBox => match index {
-            0u8 => Some(SlotId::RichEditBoxHeader),
-            _ => None,
-        },
-        MountedKind::Viewbox => match index {
-            0u8 => Some(SlotId::ViewboxChild),
-            _ => None,
-        },
-        _ => None,
-    }
-}
 pub fn slots(kind: MountedKind) -> &'static [SlotId] {
     match kind {
-        MountedKind::TextBlock => &[],
-        MountedKind::Button => &[],
-        MountedKind::HyperlinkButton => &[],
-        MountedKind::RepeatButton => &[],
-        MountedKind::Border => &[],
-        MountedKind::BreadcrumbBar => &[],
-        MountedKind::StackPanel => &[],
-        MountedKind::VariableSizedWrapGrid => &[],
-        MountedKind::Grid => &[],
         MountedKind::TextBox => &[SlotId::TextBoxHeader],
         MountedKind::AutoSuggestBox => &[SlotId::AutoSuggestBoxHeader],
         MountedKind::PasswordBox => &[SlotId::PasswordBoxHeader],
@@ -12509,6 +12418,7 @@ pub fn slots(kind: MountedKind) -> &'static [SlotId] {
             SlotId::NavigationViewPaneCustomContent,
             SlotId::NavigationViewPaneFooter,
             SlotId::NavigationViewMenuItems,
+            SlotId::NavigationViewFooterMenuItems,
         ],
         MountedKind::NavigationViewItem => &[
             SlotId::NavigationViewItemContent,
@@ -12516,80 +12426,41 @@ pub fn slots(kind: MountedKind) -> &'static [SlotId] {
             SlotId::NavigationViewItemMenuItems,
         ],
         MountedKind::SplitView => &[SlotId::SplitViewPane, SlotId::SplitViewContent],
-        MountedKind::ProgressBar => &[],
         MountedKind::ToggleSwitch => &[
             SlotId::ToggleSwitchHeader,
             SlotId::ToggleSwitchOnContent,
             SlotId::ToggleSwitchOffContent,
         ],
-        MountedKind::CheckBox => &[],
-        MountedKind::ToggleButton => &[],
-        MountedKind::RadioButton => &[],
         MountedKind::RadioButtons => &[SlotId::RadioButtonsHeader],
-        MountedKind::ItemsRepeater => &[],
-        MountedKind::InfoBadge => &[],
-        MountedKind::InfoBar => &[],
-        MountedKind::PersonPicture => &[],
-        MountedKind::ScrollViewer => &[],
-        MountedKind::ScrollView => &[],
-        MountedKind::Image => &[],
-        MountedKind::ProgressRing => &[],
         MountedKind::ListBox => &[SlotId::ListBoxItems],
-        MountedKind::Rectangle => &[],
-        MountedKind::Ellipse => &[],
-        MountedKind::Line => &[],
-        MountedKind::SymbolIcon => &[],
-        MountedKind::ImageIcon => &[],
-        MountedKind::FontIcon => &[],
-        MountedKind::BitmapIcon => &[],
-        MountedKind::PathIcon => &[],
-        MountedKind::ListBoxItem => &[],
-        MountedKind::RatingControl => &[],
         MountedKind::Expander => &[SlotId::ExpanderHeader, SlotId::ExpanderContent],
         MountedKind::ComboBox => &[SlotId::ComboBoxHeader],
         MountedKind::Pivot => &[SlotId::PivotItems],
-        MountedKind::PivotItem => &[],
         MountedKind::FlipView => &[SlotId::FlipViewItems],
         MountedKind::SelectorBar => &[SlotId::SelectorBarItems],
         MountedKind::SelectorBarItem => &[SlotId::SelectorBarItemIcon],
         MountedKind::TabView => &[SlotId::TabViewTabItems],
-        MountedKind::TabViewItem => &[],
-        MountedKind::TeachingTip => &[],
-        MountedKind::DropDownButton => &[],
         MountedKind::CommandBar => &[
             SlotId::CommandBarPrimaryCommands,
             SlotId::CommandBarSecondaryCommands,
         ],
         MountedKind::AppBarButton => &[SlotId::AppBarButtonIcon],
-        MountedKind::AppBarSeparator => &[],
         MountedKind::MenuBar => &[SlotId::MenuBarItems],
-        MountedKind::MenuBarItem => &[],
-        MountedKind::SplitButton => &[],
-        MountedKind::ColorPicker => &[],
         MountedKind::DatePicker => &[SlotId::DatePickerHeader],
         MountedKind::TimePicker => &[SlotId::TimePickerHeader],
         MountedKind::CalendarDatePicker => &[SlotId::CalendarDatePickerHeader],
-        MountedKind::ToolTip => &[],
-        MountedKind::ContentDialog => &[],
-        MountedKind::CalendarView => &[],
         MountedKind::ListView => &[SlotId::ListViewItems],
-        MountedKind::ListViewItem => &[],
-        MountedKind::TreeView => &[],
         MountedKind::GridView => &[SlotId::GridViewItems],
-        MountedKind::GridViewItem => &[],
-        MountedKind::RelativePanel => &[],
-        MountedKind::Canvas => &[],
         MountedKind::RichEditBox => &[SlotId::RichEditBoxHeader],
-        MountedKind::RichTextBlock => &[],
         MountedKind::Viewbox => &[SlotId::ViewboxChild],
-        MountedKind::WebView2 => &[],
-        MountedKind::SwapChainPanel => &[],
+        _ => &[],
     }
 }
 pub fn slot_is_collection(slot: SlotId) -> bool {
     matches!(
         slot,
         SlotId::NavigationViewMenuItems
+            | SlotId::NavigationViewFooterMenuItems
             | SlotId::NavigationViewItemMenuItems
             | SlotId::ListBoxItems
             | SlotId::PivotItems
@@ -12616,7 +12487,7 @@ pub(crate) struct TextBlockMountedProps {
 }
 impl PartialEq for TextBlockMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.text == other.text
+        self.text == other.text
             && self.text_wrapping == other.text_wrapping
             && f64_property_eq(&self.font_size, &other.font_size)
             && self.font_weight == other.font_weight
@@ -12638,7 +12509,7 @@ pub(crate) struct ButtonMountedProps {
 }
 impl PartialEq for ButtonMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.is_enabled == other.is_enabled
+        self.is_enabled == other.is_enabled
             && self.horizontal_content_alignment == other.horizontal_content_alignment
             && self.vertical_content_alignment == other.vertical_content_alignment
             && self.resource_overrides == other.resource_overrides
@@ -12655,7 +12526,7 @@ pub(crate) struct HyperlinkButtonMountedProps {
 }
 impl PartialEq for HyperlinkButtonMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.navigate_uri == other.navigate_uri
+        self.navigate_uri == other.navigate_uri
             && self.is_enabled == other.is_enabled
             && self.on_click == other.on_click
     }
@@ -12669,7 +12540,7 @@ pub(crate) struct RepeatButtonMountedProps {
 }
 impl PartialEq for RepeatButtonMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.delay == other.delay
+        self.delay == other.delay
             && self.interval == other.interval
             && self.is_enabled == other.is_enabled
             && self.on_click == other.on_click
@@ -12677,6 +12548,8 @@ impl PartialEq for RepeatButtonMountedProps {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct BorderMountedProps {
+    is_tab_stop: Property<bool>,
+    allow_focus_on_interaction: Property<bool>,
     padding: Property<Thickness>,
     border_thickness: Property<Thickness>,
     corner_radius: Property<CornerRadius>,
@@ -12686,12 +12559,15 @@ pub(crate) struct BorderMountedProps {
     scale: Property<f64>,
     scale_transition: Property<std::time::Duration>,
     capture_pointer_on_press: Property<bool>,
-    drop_policy: Property<DragDropPolicy>,
+    focus_on_pointer_release: Property<bool>,
+    drop_policy: Property<std::rc::Rc<DragDropPolicy>>,
     events: Option<std::rc::Rc<BorderEvents>>,
 }
 impl PartialEq for BorderMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.padding == other.padding
+        self.is_tab_stop == other.is_tab_stop
+            && self.allow_focus_on_interaction == other.allow_focus_on_interaction
+            && self.padding == other.padding
             && self.border_thickness == other.border_thickness
             && self.corner_radius == other.corner_radius
             && self.background == other.background
@@ -12700,6 +12576,7 @@ impl PartialEq for BorderMountedProps {
             && f64_property_eq(&self.scale, &other.scale)
             && self.scale_transition == other.scale_transition
             && self.capture_pointer_on_press == other.capture_pointer_on_press
+            && self.focus_on_pointer_release == other.focus_on_pointer_release
             && self.drop_policy == other.drop_policy
             && self.events == other.events
     }
@@ -12711,8 +12588,7 @@ pub(crate) struct BreadcrumbBarMountedProps {
 }
 impl PartialEq for BreadcrumbBarMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.items_source == other.items_source
-            && self.on_item_clicked == other.on_item_clicked
+        self.items_source == other.items_source && self.on_item_clicked == other.on_item_clicked
     }
 }
 #[derive(Clone, Debug)]
@@ -12722,8 +12598,7 @@ pub(crate) struct StackPanelMountedProps {
 }
 impl PartialEq for StackPanelMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.orientation == other.orientation
-            && f64_property_eq(&self.spacing, &other.spacing)
+        self.orientation == other.orientation && f64_property_eq(&self.spacing, &other.spacing)
     }
 }
 #[derive(Clone, Debug)]
@@ -12734,7 +12609,7 @@ pub(crate) struct VariableSizedWrapGridMountedProps {
 }
 impl PartialEq for VariableSizedWrapGridMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && f64_property_eq(&self.item_width, &other.item_width)
+        f64_property_eq(&self.item_width, &other.item_width)
             && f64_property_eq(&self.item_height, &other.item_height)
             && self.orientation == other.orientation
     }
@@ -12750,7 +12625,7 @@ pub(crate) struct GridMountedProps {
 }
 impl PartialEq for GridMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && f64_property_eq(&self.row_spacing, &other.row_spacing)
+        f64_property_eq(&self.row_spacing, &other.row_spacing)
             && f64_property_eq(&self.column_spacing, &other.column_spacing)
             && self.key_accelerators == other.key_accelerators
             && self.background == other.background
@@ -12772,7 +12647,7 @@ pub(crate) struct TextBoxMountedProps {
 }
 impl PartialEq for TextBoxMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.text == other.text
+        self.text == other.text
             && self.placeholder_text == other.placeholder_text
             && self.is_enabled == other.is_enabled
             && self.accepts_return == other.accepts_return
@@ -12793,7 +12668,7 @@ pub(crate) struct AutoSuggestBoxMountedProps {
 }
 impl PartialEq for AutoSuggestBoxMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.text == other.text
+        self.text == other.text
             && self.items_source == other.items_source
             && self.placeholder_text == other.placeholder_text
             && self.is_enabled == other.is_enabled
@@ -12810,7 +12685,7 @@ pub(crate) struct PasswordBoxMountedProps {
 }
 impl PartialEq for PasswordBoxMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.password == other.password
+        self.password == other.password
             && self.placeholder_text == other.placeholder_text
             && self.password_reveal_mode == other.password_reveal_mode
             && self.is_enabled == other.is_enabled
@@ -12827,7 +12702,7 @@ pub(crate) struct NumberBoxMountedProps {
 }
 impl PartialEq for NumberBoxMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && f64_property_eq(&self.minimum, &other.minimum)
+        f64_property_eq(&self.minimum, &other.minimum)
             && f64_property_eq(&self.maximum, &other.maximum)
             && self.value == other.value
             && self.is_enabled == other.is_enabled
@@ -12846,7 +12721,7 @@ pub(crate) struct SliderMountedProps {
 }
 impl PartialEq for SliderMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && f64_property_eq(&self.minimum, &other.minimum)
+        f64_property_eq(&self.minimum, &other.minimum)
             && f64_property_eq(&self.maximum, &other.maximum)
             && f64_property_eq(&self.value, &other.value)
             && self.is_enabled == other.is_enabled
@@ -12866,7 +12741,7 @@ pub(crate) struct TitleBarMountedProps {
 }
 impl PartialEq for TitleBarMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.title == other.title
+        self.title == other.title
             && self.subtitle == other.subtitle
             && self.is_back_button_visible == other.is_back_button_visible
             && self.is_back_button_enabled == other.is_back_button_enabled
@@ -12889,7 +12764,7 @@ pub(crate) struct NavigationViewMountedProps {
 }
 impl PartialEq for NavigationViewMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.is_enabled == other.is_enabled
+        self.is_enabled == other.is_enabled
             && self.pane_display_mode == other.pane_display_mode
             && self.is_pane_toggle_button_visible == other.is_pane_toggle_button_visible
             && self.is_back_button_visible == other.is_back_button_visible
@@ -12910,7 +12785,7 @@ pub(crate) struct NavigationViewItemMountedProps {
 }
 impl PartialEq for NavigationViewItemMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.tag == other.tag
+        self.tag == other.tag
             && self.is_selected == other.is_selected
             && self.selects_on_invoked == other.selects_on_invoked
             && self.is_expanded == other.is_expanded
@@ -12926,7 +12801,7 @@ pub(crate) struct SplitViewMountedProps {
 }
 impl PartialEq for SplitViewMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && f64_property_eq(&self.open_pane_length, &other.open_pane_length)
+        f64_property_eq(&self.open_pane_length, &other.open_pane_length)
             && f64_property_eq(&self.compact_pane_length, &other.compact_pane_length)
             && self.display_mode == other.display_mode
             && self.is_pane_open == other.is_pane_open
@@ -12945,7 +12820,7 @@ pub(crate) struct ProgressBarMountedProps {
 }
 impl PartialEq for ProgressBarMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && f64_property_eq(&self.minimum, &other.minimum)
+        f64_property_eq(&self.minimum, &other.minimum)
             && f64_property_eq(&self.maximum, &other.maximum)
             && f64_property_eq(&self.value, &other.value)
             && self.is_indeterminate == other.is_indeterminate
@@ -12962,7 +12837,7 @@ pub(crate) struct ToggleSwitchMountedProps {
 }
 impl PartialEq for ToggleSwitchMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.is_on == other.is_on
+        self.is_on == other.is_on
             && self.is_enabled == other.is_enabled
             && self.on_toggled == other.on_toggled
     }
@@ -12975,7 +12850,7 @@ pub(crate) struct CheckBoxMountedProps {
 }
 impl PartialEq for CheckBoxMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.is_checked == other.is_checked
+        self.is_checked == other.is_checked
             && self.is_enabled == other.is_enabled
             && self.on_is_checked_changed == other.on_is_checked_changed
     }
@@ -12988,7 +12863,7 @@ pub(crate) struct ToggleButtonMountedProps {
 }
 impl PartialEq for ToggleButtonMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.is_checked == other.is_checked
+        self.is_checked == other.is_checked
             && self.is_enabled == other.is_enabled
             && self.on_is_checked_changed == other.on_is_checked_changed
     }
@@ -13002,7 +12877,7 @@ pub(crate) struct RadioButtonMountedProps {
 }
 impl PartialEq for RadioButtonMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.group_name == other.group_name
+        self.group_name == other.group_name
             && self.is_checked == other.is_checked
             && self.is_enabled == other.is_enabled
             && self.on_checked == other.on_checked
@@ -13017,7 +12892,7 @@ pub(crate) struct RadioButtonsMountedProps {
 }
 impl PartialEq for RadioButtonsMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.items_source == other.items_source
+        self.items_source == other.items_source
             && self.selected_index == other.selected_index
             && self.max_columns == other.max_columns
             && self.on_selection_changed == other.on_selection_changed
@@ -13036,7 +12911,7 @@ pub(crate) struct InfoBadgeMountedProps {
 }
 impl PartialEq for InfoBadgeMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.value == other.value
+        self.value == other.value
     }
 }
 #[derive(Clone, Debug)]
@@ -13050,7 +12925,7 @@ pub(crate) struct InfoBarMountedProps {
 }
 impl PartialEq for InfoBarMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.title == other.title
+        self.title == other.title
             && self.message == other.message
             && self.severity == other.severity
             && self.is_open == other.is_open
@@ -13065,7 +12940,7 @@ pub(crate) struct PersonPictureMountedProps {
 }
 impl PartialEq for PersonPictureMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.display_name == other.display_name && self.initials == other.initials
+        self.display_name == other.display_name && self.initials == other.initials
     }
 }
 #[derive(Clone, Debug)]
@@ -13075,7 +12950,7 @@ pub(crate) struct ScrollViewerMountedProps {
 }
 impl PartialEq for ScrollViewerMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.horizontal_scroll_bar_visibility == other.horizontal_scroll_bar_visibility
+        self.horizontal_scroll_bar_visibility == other.horizontal_scroll_bar_visibility
             && self.vertical_scroll_bar_visibility == other.vertical_scroll_bar_visibility
     }
 }
@@ -13086,7 +12961,7 @@ pub(crate) struct ScrollViewMountedProps {
 }
 impl PartialEq for ScrollViewMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.horizontal_scroll_bar_visibility == other.horizontal_scroll_bar_visibility
+        self.horizontal_scroll_bar_visibility == other.horizontal_scroll_bar_visibility
             && self.vertical_scroll_bar_visibility == other.vertical_scroll_bar_visibility
     }
 }
@@ -13098,9 +12973,7 @@ pub(crate) struct ImageMountedProps {
 }
 impl PartialEq for ImageMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.source == other.source
-            && self.stretch == other.stretch
-            && self.events == other.events
+        self.source == other.source && self.stretch == other.stretch && self.events == other.events
     }
 }
 #[derive(Clone, Debug)]
@@ -13114,7 +12987,7 @@ pub(crate) struct ProgressRingMountedProps {
 }
 impl PartialEq for ProgressRingMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && f64_property_eq(&self.minimum, &other.minimum)
+        f64_property_eq(&self.minimum, &other.minimum)
             && f64_property_eq(&self.maximum, &other.maximum)
             && f64_property_eq(&self.value, &other.value)
             && self.is_indeterminate == other.is_indeterminate
@@ -13129,7 +13002,7 @@ pub(crate) struct ListBoxMountedProps {
 }
 impl PartialEq for ListBoxMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.is_enabled == other.is_enabled
+        self.is_enabled == other.is_enabled
             && self.on_selected_tag_changed == other.on_selected_tag_changed
     }
 }
@@ -13143,7 +13016,7 @@ pub(crate) struct RectangleMountedProps {
 }
 impl PartialEq for RectangleMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.fill == other.fill
+        self.fill == other.fill
             && self.stroke == other.stroke
             && f64_property_eq(&self.stroke_thickness, &other.stroke_thickness)
             && f64_property_eq(&self.radius_x, &other.radius_x)
@@ -13158,7 +13031,7 @@ pub(crate) struct EllipseMountedProps {
 }
 impl PartialEq for EllipseMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.fill == other.fill
+        self.fill == other.fill
             && self.stroke == other.stroke
             && f64_property_eq(&self.stroke_thickness, &other.stroke_thickness)
     }
@@ -13174,7 +13047,7 @@ pub(crate) struct LineMountedProps {
 }
 impl PartialEq for LineMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.stroke == other.stroke
+        self.stroke == other.stroke
             && f64_property_eq(&self.stroke_thickness, &other.stroke_thickness)
             && f64_property_eq(&self.x1, &other.x1)
             && f64_property_eq(&self.y1, &other.y1)
@@ -13188,7 +13061,7 @@ pub(crate) struct SymbolIconMountedProps {
 }
 impl PartialEq for SymbolIconMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.symbol == other.symbol
+        self.symbol == other.symbol
     }
 }
 #[derive(Clone, Debug)]
@@ -13197,7 +13070,7 @@ pub(crate) struct ImageIconMountedProps {
 }
 impl PartialEq for ImageIconMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.source == other.source
+        self.source == other.source
     }
 }
 #[derive(Clone, Debug)]
@@ -13206,7 +13079,7 @@ pub(crate) struct FontIconMountedProps {
 }
 impl PartialEq for FontIconMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.glyph == other.glyph
+        self.glyph == other.glyph
     }
 }
 #[derive(Clone, Debug)]
@@ -13216,8 +13089,7 @@ pub(crate) struct BitmapIconMountedProps {
 }
 impl PartialEq for BitmapIconMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.uri_source == other.uri_source
-            && self.show_as_monochrome == other.show_as_monochrome
+        self.uri_source == other.uri_source && self.show_as_monochrome == other.show_as_monochrome
     }
 }
 #[derive(Clone, Debug)]
@@ -13226,7 +13098,7 @@ pub(crate) struct PathIconMountedProps {
 }
 impl PartialEq for PathIconMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.data == other.data
+        self.data == other.data
     }
 }
 #[derive(Clone, Debug)]
@@ -13236,7 +13108,7 @@ pub(crate) struct ListBoxItemMountedProps {
 }
 impl PartialEq for ListBoxItemMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.tag == other.tag && self.is_selected == other.is_selected
+        self.tag == other.tag && self.is_selected == other.is_selected
     }
 }
 #[derive(Clone, Debug)]
@@ -13249,7 +13121,7 @@ pub(crate) struct RatingControlMountedProps {
 }
 impl PartialEq for RatingControlMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.max_rating == other.max_rating
+        self.max_rating == other.max_rating
             && self.value == other.value
             && self.caption == other.caption
             && self.is_read_only == other.is_read_only
@@ -13263,7 +13135,7 @@ pub(crate) struct ExpanderMountedProps {
 }
 impl PartialEq for ExpanderMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.is_expanded == other.is_expanded
+        self.is_expanded == other.is_expanded
             && self.on_is_expanded_changed == other.on_is_expanded_changed
     }
 }
@@ -13278,7 +13150,7 @@ pub(crate) struct ComboBoxMountedProps {
 }
 impl PartialEq for ComboBoxMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.items_source == other.items_source
+        self.items_source == other.items_source
             && self.selected_index == other.selected_index
             && self.placeholder_text == other.placeholder_text
             && self.is_editable == other.is_editable
@@ -13294,7 +13166,7 @@ pub(crate) struct PivotMountedProps {
 }
 impl PartialEq for PivotMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.selected_index == other.selected_index
+        self.selected_index == other.selected_index
             && self.title == other.title
             && self.on_selection_changed == other.on_selection_changed
     }
@@ -13305,7 +13177,7 @@ pub(crate) struct PivotItemMountedProps {
 }
 impl PartialEq for PivotItemMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.header == other.header
+        self.header == other.header
     }
 }
 #[derive(Clone, Debug)]
@@ -13315,7 +13187,7 @@ pub(crate) struct FlipViewMountedProps {
 }
 impl PartialEq for FlipViewMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.selected_index == other.selected_index
+        self.selected_index == other.selected_index
             && self.on_selection_changed == other.on_selection_changed
     }
 }
@@ -13325,7 +13197,7 @@ pub(crate) struct SelectorBarMountedProps {
 }
 impl PartialEq for SelectorBarMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.on_selected_text_changed == other.on_selected_text_changed
+        self.on_selected_text_changed == other.on_selected_text_changed
     }
 }
 #[derive(Clone, Debug)]
@@ -13335,7 +13207,7 @@ pub(crate) struct SelectorBarItemMountedProps {
 }
 impl PartialEq for SelectorBarItemMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.text == other.text && self.is_selected == other.is_selected
+        self.text == other.text && self.is_selected == other.is_selected
     }
 }
 #[derive(Clone, Debug)]
@@ -13347,7 +13219,7 @@ pub(crate) struct TabViewMountedProps {
 }
 impl PartialEq for TabViewMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.selected_index == other.selected_index
+        self.selected_index == other.selected_index
             && self.can_reorder_tabs == other.can_reorder_tabs
             && self.is_add_tab_button_visible == other.is_add_tab_button_visible
             && self.events == other.events
@@ -13361,7 +13233,7 @@ pub(crate) struct TabViewItemMountedProps {
 }
 impl PartialEq for TabViewItemMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.header == other.header
+        self.header == other.header
             && self.is_closable == other.is_closable
             && self.tag == other.tag
     }
@@ -13379,7 +13251,7 @@ pub(crate) struct TeachingTipMountedProps {
 }
 impl PartialEq for TeachingTipMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.title == other.title
+        self.title == other.title
             && self.subtitle == other.subtitle
             && self.is_open == other.is_open
             && self.is_light_dismiss_enabled == other.is_light_dismiss_enabled
@@ -13396,7 +13268,7 @@ pub(crate) struct DropDownButtonMountedProps {
 }
 impl PartialEq for DropDownButtonMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.is_enabled == other.is_enabled && self.on_click == other.on_click
+        self.is_enabled == other.is_enabled && self.on_click == other.on_click
     }
 }
 #[derive(Clone, Debug)]
@@ -13414,7 +13286,7 @@ pub(crate) struct AppBarButtonMountedProps {
 }
 impl PartialEq for AppBarButtonMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.label == other.label
+        self.label == other.label
             && self.is_enabled == other.is_enabled
             && self.on_click == other.on_click
     }
@@ -13439,7 +13311,7 @@ pub(crate) struct MenuBarItemMountedProps {
 }
 impl PartialEq for MenuBarItemMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.title == other.title
+        self.title == other.title
     }
 }
 #[derive(Clone, Debug)]
@@ -13449,7 +13321,7 @@ pub(crate) struct SplitButtonMountedProps {
 }
 impl PartialEq for SplitButtonMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.is_enabled == other.is_enabled && self.on_click == other.on_click
+        self.is_enabled == other.is_enabled && self.on_click == other.on_click
     }
 }
 #[derive(Clone, Debug)]
@@ -13464,7 +13336,7 @@ pub(crate) struct ColorPickerMountedProps {
 }
 impl PartialEq for ColorPickerMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.color == other.color
+        self.color == other.color
             && self.is_alpha_enabled == other.is_alpha_enabled
             && self.is_hex_input_visible == other.is_hex_input_visible
             && self.is_color_slider_visible == other.is_color_slider_visible
@@ -13483,7 +13355,7 @@ pub(crate) struct DatePickerMountedProps {
 }
 impl PartialEq for DatePickerMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.day_visible == other.day_visible
+        self.day_visible == other.day_visible
             && self.month_visible == other.month_visible
             && self.year_visible == other.year_visible
             && self.is_enabled == other.is_enabled
@@ -13499,7 +13371,7 @@ pub(crate) struct TimePickerMountedProps {
 }
 impl PartialEq for TimePickerMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.clock_identifier == other.clock_identifier
+        self.clock_identifier == other.clock_identifier
             && self.minute_increment == other.minute_increment
             && self.is_enabled == other.is_enabled
             && self.on_selected_time_changed == other.on_selected_time_changed
@@ -13515,7 +13387,7 @@ pub(crate) struct CalendarDatePickerMountedProps {
 }
 impl PartialEq for CalendarDatePickerMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.placeholder_text == other.placeholder_text
+        self.placeholder_text == other.placeholder_text
             && self.is_today_highlighted == other.is_today_highlighted
             && self.is_calendar_open == other.is_calendar_open
             && self.is_enabled == other.is_enabled
@@ -13541,7 +13413,7 @@ pub(crate) struct ContentDialogMountedProps {
 }
 impl PartialEq for ContentDialogMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.title == other.title
+        self.title == other.title
             && self.primary_button_text == other.primary_button_text
             && self.secondary_button_text == other.secondary_button_text
             && self.close_button_text == other.close_button_text
@@ -13559,7 +13431,7 @@ pub(crate) struct CalendarViewMountedProps {
 }
 impl PartialEq for CalendarViewMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.is_today_highlighted == other.is_today_highlighted
+        self.is_today_highlighted == other.is_today_highlighted
             && self.is_group_label_visible == other.is_group_label_visible
             && self.is_enabled == other.is_enabled
             && self.on_selected_dates_changed == other.on_selected_dates_changed
@@ -13576,7 +13448,7 @@ pub(crate) struct ListViewMountedProps {
 }
 impl PartialEq for ListViewMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.selected_index == other.selected_index
+        self.selected_index == other.selected_index
             && self.selection_mode == other.selection_mode
             && self.can_drag_items == other.can_drag_items
             && self.can_reorder_items == other.can_reorder_items
@@ -13590,7 +13462,7 @@ pub(crate) struct ListViewItemMountedProps {
 }
 impl PartialEq for ListViewItemMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.tag == other.tag
+        self.tag == other.tag
     }
 }
 #[derive(Clone, Debug)]
@@ -13600,8 +13472,7 @@ pub(crate) struct TreeViewMountedProps {
 }
 impl PartialEq for TreeViewMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.selection_mode == other.selection_mode
-            && self.on_item_invoked == other.on_item_invoked
+        self.selection_mode == other.selection_mode && self.on_item_invoked == other.on_item_invoked
     }
 }
 #[derive(Clone, Debug)]
@@ -13614,7 +13485,7 @@ pub(crate) struct GridViewMountedProps {
 }
 impl PartialEq for GridViewMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.selected_index == other.selected_index
+        self.selected_index == other.selected_index
             && self.can_drag_items == other.can_drag_items
             && self.can_reorder_items == other.can_reorder_items
             && self.allow_drop == other.allow_drop
@@ -13627,7 +13498,7 @@ pub(crate) struct GridViewItemMountedProps {
 }
 impl PartialEq for GridViewItemMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.tag == other.tag
+        self.tag == other.tag
     }
 }
 #[derive(Clone, Debug)]
@@ -13654,7 +13525,7 @@ pub(crate) struct RichEditBoxMountedProps {
 }
 impl PartialEq for RichEditBoxMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.text == other.text
+        self.text == other.text
             && self.placeholder_text == other.placeholder_text
             && self.is_read_only == other.is_read_only
             && self.is_enabled == other.is_enabled
@@ -13670,7 +13541,7 @@ pub(crate) struct RichTextBlockMountedProps {
 }
 impl PartialEq for RichTextBlockMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.paragraphs == other.paragraphs
+        self.paragraphs == other.paragraphs
             && f64_property_eq(&self.font_size, &other.font_size)
             && self.is_text_selection_enabled == other.is_text_selection_enabled
             && self.text_wrapping == other.text_wrapping
@@ -13682,7 +13553,7 @@ pub(crate) struct ViewboxMountedProps {
 }
 impl PartialEq for ViewboxMountedProps {
     fn eq(&self, other: &Self) -> bool {
-        true && self.stretch == other.stretch
+        self.stretch == other.stretch
     }
 }
 #[derive(Clone, Debug)]
@@ -13830,6 +13701,7 @@ pub enum PropertyId {
     RelativeAlignVerticalCenter,
     CanvasLeft,
     CanvasTop,
+    Transitions,
     AutomationName,
     AutomationId,
     AutomationHeadingLevel,
@@ -13852,6 +13724,8 @@ pub enum PropertyId {
     RepeatButtonDelay,
     RepeatButtonInterval,
     RepeatButtonIsEnabled,
+    BorderIsTabStop,
+    BorderAllowFocusOnInteraction,
     BorderPadding,
     BorderBorderThickness,
     BorderCornerRadius,
@@ -13861,6 +13735,7 @@ pub enum PropertyId {
     BorderScale,
     BorderScaleTransition,
     BorderCapturePointerOnPress,
+    BorderFocusOnPointerRelease,
     BorderAllowDrop,
     BreadcrumbBarItemsSource,
     StackPanelOrientation,
@@ -14082,6 +13957,11 @@ pub enum EventId {
     BorderPointerReleased,
     BorderPointerCaptureLost,
     BorderPointerCanceled,
+    BorderPreviewKeyDown,
+    BorderKeyUp,
+    BorderCharacterReceived,
+    BorderGotFocus,
+    BorderLostFocus,
     BreadcrumbBarItemClicked,
     TextBoxTextChanged,
     AutoSuggestBoxTextChanged,
@@ -14168,6 +14048,7 @@ pub enum PropertyValue {
     TeachingTipPlacementMode(TeachingTipPlacementMode),
     TextTrimming(TextTrimming),
     TextWrapping(TextWrapping),
+    ThemeTransitions(std::rc::Rc<Vec<ThemeTransition>>),
     Thickness(Thickness),
     TreeViewSelectionMode(TreeViewSelectionMode),
     VerticalAlignment(VerticalAlignment),
@@ -14226,6 +14107,7 @@ impl PartialEq for PropertyValue {
             }
             (Self::TextTrimming(left), Self::TextTrimming(right)) => left == right,
             (Self::TextWrapping(left), Self::TextWrapping(right)) => left == right,
+            (Self::ThemeTransitions(left), Self::ThemeTransitions(right)) => left == right,
             (Self::Thickness(left), Self::Thickness(right)) => left == right,
             (Self::TreeViewSelectionMode(left), Self::TreeViewSelectionMode(right)) => {
                 left == right
@@ -14271,6 +14153,7 @@ pub enum PropertyValueRef<'a> {
     TeachingTipPlacementMode(TeachingTipPlacementMode),
     TextTrimming(TextTrimming),
     TextWrapping(TextWrapping),
+    ThemeTransitions(&'a std::rc::Rc<Vec<ThemeTransition>>),
     Thickness(&'a Thickness),
     TreeViewSelectionMode(TreeViewSelectionMode),
     VerticalAlignment(VerticalAlignment),
@@ -14340,6 +14223,7 @@ impl PropertyValueRef<'_> {
             ) => left == *right,
             (Self::TextTrimming(left), PropertyValue::TextTrimming(right)) => left == *right,
             (Self::TextWrapping(left), PropertyValue::TextWrapping(right)) => left == *right,
+            (Self::ThemeTransitions(left), PropertyValue::ThemeTransitions(right)) => left == right,
             (Self::Thickness(left), PropertyValue::Thickness(right)) => left == right,
             (Self::TreeViewSelectionMode(left), PropertyValue::TreeViewSelectionMode(right)) => {
                 left == *right
@@ -14392,6 +14276,7 @@ impl PropertyValueRef<'_> {
             Self::TeachingTipPlacementMode(value) => PropertyValue::TeachingTipPlacementMode(value),
             Self::TextTrimming(value) => PropertyValue::TextTrimming(value),
             Self::TextWrapping(value) => PropertyValue::TextWrapping(value),
+            Self::ThemeTransitions(value) => PropertyValue::ThemeTransitions(value.clone()),
             Self::Thickness(value) => PropertyValue::Thickness(value.clone()),
             Self::TreeViewSelectionMode(value) => PropertyValue::TreeViewSelectionMode(value),
             Self::VerticalAlignment(value) => PropertyValue::VerticalAlignment(value),
@@ -14568,6 +14453,11 @@ impl From<TextWrapping> for PropertyValue {
         Self::TextWrapping(value)
     }
 }
+impl From<std::rc::Rc<Vec<ThemeTransition>>> for PropertyValue {
+    fn from(value: std::rc::Rc<Vec<ThemeTransition>>) -> Self {
+        Self::ThemeTransitions(value)
+    }
+}
 impl From<Thickness> for PropertyValue {
     fn from(value: Thickness) -> Self {
         Self::Thickness(value)
@@ -14591,11 +14481,14 @@ pub struct SelectionChange {
 #[derive(Clone, Debug)]
 pub enum EventPayload {
     Bool(bool),
+    CharacterEventInfo(CharacterEventInfo),
     Color(Color),
     ContentDialogResult(ContentDialogResult),
     DragKind(DragKind),
     DroppedData(DroppedData),
     F64(f64),
+    FocusEventInfo(FocusEventInfo),
+    KeyEventInfo(KeyEventInfo),
     NavigationViewDisplayMode(NavigationViewDisplayMode),
     OptionalDateTime(Option<windows_time::DateTime>),
     OptionalF64(Option<f64>),
@@ -14612,11 +14505,14 @@ impl PartialEq for EventPayload {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Bool(left), Self::Bool(right)) => left == right,
+            (Self::CharacterEventInfo(left), Self::CharacterEventInfo(right)) => left == right,
             (Self::Color(left), Self::Color(right)) => left == right,
             (Self::ContentDialogResult(left), Self::ContentDialogResult(right)) => left == right,
             (Self::DragKind(left), Self::DragKind(right)) => left == right,
             (Self::DroppedData(left), Self::DroppedData(right)) => left == right,
             (Self::F64(left), Self::F64(right)) => f64_eq(*left, *right),
+            (Self::FocusEventInfo(left), Self::FocusEventInfo(right)) => left == right,
+            (Self::KeyEventInfo(left), Self::KeyEventInfo(right)) => left == right,
             (Self::NavigationViewDisplayMode(left), Self::NavigationViewDisplayMode(right)) => {
                 left == right
             }
@@ -14646,55 +14542,155 @@ pub enum ControlRole {
     Slots,
     Virtual,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Capability {
-    Layout,
-    TextStyle,
-    Enabled,
-    Content,
-    Children,
-    ControlledText,
-    Items,
-    Focus,
-    Reference,
-    GridDefinitions,
-    WindowTitleBar,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PropertyDescriptor {
-    pub id: PropertyId,
-    pub name: &'static str,
-    pub field: &'static str,
-    pub value: &'static str,
-    pub interface: &'static str,
-    pub clearable: bool,
-    pub feedback: Option<&'static str>,
-    pub feedback_contract: Option<&'static str>,
-    pub observes_feedback: bool,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct EventDescriptor {
-    pub id: EventId,
-    pub name: &'static str,
-    pub field: &'static str,
-    pub payload: &'static str,
-    pub interface: &'static str,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SlotDescriptor {
-    pub id: SlotId,
-    pub name: &'static str,
-    pub interface: &'static str,
-    pub target: &'static str,
-    pub collection: bool,
+pub const fn control_role(kind: MountedKind) -> ControlRole {
+    match kind {
+        MountedKind::StackPanel
+        | MountedKind::VariableSizedWrapGrid
+        | MountedKind::Grid
+        | MountedKind::RelativePanel
+        | MountedKind::Canvas => ControlRole::Children,
+        MountedKind::Button
+        | MountedKind::HyperlinkButton
+        | MountedKind::RepeatButton
+        | MountedKind::Border
+        | MountedKind::CheckBox
+        | MountedKind::ToggleButton
+        | MountedKind::RadioButton
+        | MountedKind::ScrollViewer
+        | MountedKind::ScrollView
+        | MountedKind::ListBoxItem
+        | MountedKind::PivotItem
+        | MountedKind::TabViewItem
+        | MountedKind::DropDownButton
+        | MountedKind::SplitButton
+        | MountedKind::ToolTip
+        | MountedKind::ContentDialog
+        | MountedKind::ListViewItem
+        | MountedKind::GridViewItem => ControlRole::Content,
+        MountedKind::TextBlock
+        | MountedKind::BreadcrumbBar
+        | MountedKind::ProgressBar
+        | MountedKind::InfoBadge
+        | MountedKind::InfoBar
+        | MountedKind::PersonPicture
+        | MountedKind::Image
+        | MountedKind::ProgressRing
+        | MountedKind::Rectangle
+        | MountedKind::Ellipse
+        | MountedKind::Line
+        | MountedKind::SymbolIcon
+        | MountedKind::ImageIcon
+        | MountedKind::FontIcon
+        | MountedKind::BitmapIcon
+        | MountedKind::PathIcon
+        | MountedKind::RatingControl
+        | MountedKind::TeachingTip
+        | MountedKind::AppBarSeparator
+        | MountedKind::MenuBarItem
+        | MountedKind::ColorPicker
+        | MountedKind::CalendarView
+        | MountedKind::TreeView
+        | MountedKind::RichTextBlock
+        | MountedKind::WebView2
+        | MountedKind::SwapChainPanel => ControlRole::Leaf,
+        MountedKind::TextBox
+        | MountedKind::AutoSuggestBox
+        | MountedKind::PasswordBox
+        | MountedKind::NumberBox
+        | MountedKind::Slider
+        | MountedKind::TitleBar
+        | MountedKind::NavigationView
+        | MountedKind::NavigationViewItem
+        | MountedKind::SplitView
+        | MountedKind::ToggleSwitch
+        | MountedKind::RadioButtons
+        | MountedKind::ListBox
+        | MountedKind::Expander
+        | MountedKind::ComboBox
+        | MountedKind::Pivot
+        | MountedKind::FlipView
+        | MountedKind::SelectorBar
+        | MountedKind::SelectorBarItem
+        | MountedKind::TabView
+        | MountedKind::CommandBar
+        | MountedKind::AppBarButton
+        | MountedKind::MenuBar
+        | MountedKind::DatePicker
+        | MountedKind::TimePicker
+        | MountedKind::CalendarDatePicker
+        | MountedKind::ListView
+        | MountedKind::GridView
+        | MountedKind::RichEditBox
+        | MountedKind::Viewbox => ControlRole::Slots,
+        MountedKind::ItemsRepeater => ControlRole::Virtual,
+    }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SelectionDescriptor {
-    pub slot: SlotId,
+    pub slots: &'static [SlotId],
     pub item: MountedKind,
     pub selected_property: PropertyId,
     pub event: EventId,
     pub payload_property: PropertyId,
+}
+const NAVIGATION_VIEW_SELECTION: SelectionDescriptor = SelectionDescriptor {
+    slots: &[
+        SlotId::NavigationViewMenuItems,
+        SlotId::NavigationViewFooterMenuItems,
+    ],
+    item: MountedKind::NavigationViewItem,
+    selected_property: PropertyId::NavigationViewItemIsSelected,
+    event: EventId::NavigationViewSelectionChanged,
+    payload_property: PropertyId::NavigationViewItemTag,
+};
+const LIST_BOX_SELECTION: SelectionDescriptor = SelectionDescriptor {
+    slots: &[SlotId::ListBoxItems],
+    item: MountedKind::ListBoxItem,
+    selected_property: PropertyId::ListBoxItemIsSelected,
+    event: EventId::ListBoxSelectionChanged,
+    payload_property: PropertyId::ListBoxItemTag,
+};
+const SELECTOR_BAR_SELECTION: SelectionDescriptor = SelectionDescriptor {
+    slots: &[SlotId::SelectorBarItems],
+    item: MountedKind::SelectorBarItem,
+    selected_property: PropertyId::SelectorBarItemIsSelected,
+    event: EventId::SelectorBarSelectionChanged,
+    payload_property: PropertyId::SelectorBarItemText,
+};
+pub fn selection_for_event(event: EventId) -> Option<SelectionDescriptor> {
+    match event {
+        EventId::NavigationViewSelectionChanged => Some(NAVIGATION_VIEW_SELECTION),
+        EventId::ListBoxSelectionChanged => Some(LIST_BOX_SELECTION),
+        EventId::SelectorBarSelectionChanged => Some(SELECTOR_BAR_SELECTION),
+        _ => None,
+    }
+}
+pub fn selection_for_slot(slot: SlotId) -> Option<SelectionDescriptor> {
+    match slot {
+        SlotId::NavigationViewMenuItems => Some(NAVIGATION_VIEW_SELECTION),
+        SlotId::NavigationViewFooterMenuItems => Some(NAVIGATION_VIEW_SELECTION),
+        SlotId::ListBoxItems => Some(LIST_BOX_SELECTION),
+        SlotId::SelectorBarItems => Some(SELECTOR_BAR_SELECTION),
+        _ => None,
+    }
+}
+pub fn selection_for_item_property(
+    property: PropertyId,
+    slot: SlotId,
+) -> Option<SelectionDescriptor> {
+    match (property, slot) {
+        (PropertyId::NavigationViewItemIsSelected, SlotId::NavigationViewMenuItems) => {
+            Some(NAVIGATION_VIEW_SELECTION)
+        }
+        (PropertyId::NavigationViewItemIsSelected, SlotId::NavigationViewFooterMenuItems) => {
+            Some(NAVIGATION_VIEW_SELECTION)
+        }
+        (PropertyId::ListBoxItemIsSelected, SlotId::ListBoxItems) => Some(LIST_BOX_SELECTION),
+        (PropertyId::SelectorBarItemIsSelected, SlotId::SelectorBarItems) => {
+            Some(SELECTOR_BAR_SELECTION)
+        }
+        _ => None,
+    }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ControlledCollectionDescriptor {
@@ -14702,4625 +14698,55 @@ pub struct ControlledCollectionDescriptor {
     pub property: PropertyId,
     pub event: EventId,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ControlDescriptor {
-    pub kind: MountedKind,
-    pub name: &'static str,
-    pub type_name: &'static str,
-    pub role: ControlRole,
-    pub capabilities: &'static [Capability],
-    pub properties: &'static [PropertyDescriptor],
-    pub events: &'static [EventDescriptor],
-    pub slots: &'static [SlotDescriptor],
-    pub selection: Option<SelectionDescriptor>,
-    pub controlled_collection: Option<ControlledCollectionDescriptor>,
-}
-const TEXT_BLOCK_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::TextBlockText,
-        name: "Text",
-        field: "text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ITextBlock",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBlockTextWrapping,
-        name: "TextWrapping",
-        field: "text_wrapping",
-        value: "TextWrapping",
-        interface: "Microsoft.UI.Xaml.Controls.ITextBlock",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBlockFontSize,
-        name: "FontSize",
-        field: "font_size",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.ITextBlock",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBlockFontWeight,
-        name: "FontWeight",
-        field: "font_weight",
-        value: "FontWeight",
-        interface: "Microsoft.UI.Xaml.Controls.ITextBlock",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBlockIsTextSelectionEnabled,
-        name: "IsTextSelectionEnabled",
-        field: "is_text_selection_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ITextBlock",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBlockMaxLines,
-        name: "MaxLines",
-        field: "max_lines",
-        value: "I32",
-        interface: "Microsoft.UI.Xaml.Controls.ITextBlock",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBlockTextTrimming,
-        name: "TextTrimming",
-        field: "text_trimming",
-        value: "TextTrimming",
-        interface: "Microsoft.UI.Xaml.Controls.ITextBlock",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBlockForeground,
-        name: "Foreground",
-        field: "foreground",
-        value: "Brush",
-        interface: "Microsoft.UI.Xaml.Controls.ITextBlock",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const TEXT_BLOCK_EVENTS: &[EventDescriptor] = &[];
-const TEXT_BLOCK_SLOTS: &[SlotDescriptor] = &[];
-const BUTTON_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ButtonIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ButtonHorizontalContentAlignment,
-        name: "HorizontalContentAlignment",
-        field: "horizontal_content_alignment",
-        value: "HorizontalAlignment",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ButtonVerticalContentAlignment,
-        name: "VerticalContentAlignment",
-        field: "vertical_content_alignment",
-        value: "VerticalAlignment",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ButtonResources,
-        name: "Resources",
-        field: "resource_overrides",
-        value: "ResourceOverrides",
-        interface: "Microsoft.UI.Xaml.IFrameworkElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ButtonStyle,
-        name: "Style",
-        field: "style",
-        value: "ButtonStyle",
-        interface: "Microsoft.UI.Xaml.IFrameworkElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ButtonKeyboardAccelerators,
-        name: "KeyboardAccelerators",
-        field: "key_accelerators",
-        value: "KeyAccelerators",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const BUTTON_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::ButtonClick,
-    name: "Click",
-    field: "on_click",
-    payload: "Unit",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.IButtonBase",
-}];
-const BUTTON_SLOTS: &[SlotDescriptor] = &[];
-const HYPERLINK_BUTTON_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::HyperlinkButtonNavigateUri,
-        name: "NavigateUri",
-        field: "navigate_uri",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IHyperlinkButton",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::HyperlinkButtonIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const HYPERLINK_BUTTON_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::HyperlinkButtonClick,
-    name: "Click",
-    field: "on_click",
-    payload: "Unit",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.IButtonBase",
-}];
-const HYPERLINK_BUTTON_SLOTS: &[SlotDescriptor] = &[];
-const REPEAT_BUTTON_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::RepeatButtonDelay,
-        name: "Delay",
-        field: "delay",
-        value: "I32",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.IRepeatButton",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RepeatButtonInterval,
-        name: "Interval",
-        field: "interval",
-        value: "I32",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.IRepeatButton",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RepeatButtonIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const REPEAT_BUTTON_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::RepeatButtonClick,
-    name: "Click",
-    field: "on_click",
-    payload: "Unit",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.IButtonBase",
-}];
-const REPEAT_BUTTON_SLOTS: &[SlotDescriptor] = &[];
-const BORDER_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::BorderPadding,
-        name: "Padding",
-        field: "padding",
-        value: "Thickness",
-        interface: "Microsoft.UI.Xaml.Controls.IBorder",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::BorderBorderThickness,
-        name: "BorderThickness",
-        field: "border_thickness",
-        value: "Thickness",
-        interface: "Microsoft.UI.Xaml.Controls.IBorder",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::BorderCornerRadius,
-        name: "CornerRadius",
-        field: "corner_radius",
-        value: "CornerRadius",
-        interface: "Microsoft.UI.Xaml.Controls.IBorder",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::BorderBackground,
-        name: "Background",
-        field: "background",
-        value: "Brush",
-        interface: "Microsoft.UI.Xaml.Controls.IBorder",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::BorderBorderBrush,
-        name: "BorderBrush",
-        field: "border_brush",
-        value: "Brush",
-        interface: "Microsoft.UI.Xaml.Controls.IBorder",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::BorderOpacityTransition,
-        name: "OpacityTransition",
-        field: "opacity_transition",
-        value: "Duration",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::BorderScale,
-        name: "Scale",
-        field: "scale",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::BorderScaleTransition,
-        name: "ScaleTransition",
-        field: "scale_transition",
-        value: "Duration",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::BorderCapturePointerOnPress,
-        name: "CapturePointerOnPress",
-        field: "capture_pointer_on_press",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::BorderAllowDrop,
-        name: "AllowDrop",
-        field: "drop_policy",
-        value: "DragDropPolicy",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const BORDER_EVENTS: &[EventDescriptor] = &[
-    EventDescriptor {
-        id: EventId::BorderDragEnter,
-        name: "DragEnter",
-        field: "on_drag_enter",
-        payload: "DragKind",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-    },
-    EventDescriptor {
-        id: EventId::BorderDragOver,
-        name: "DragOver",
-        field: "on_drag_over",
-        payload: "DragKind",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-    },
-    EventDescriptor {
-        id: EventId::BorderDragLeave,
-        name: "DragLeave",
-        field: "on_drag_leave",
-        payload: "Unit",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-    },
-    EventDescriptor {
-        id: EventId::BorderDrop,
-        name: "Drop",
-        field: "on_drop",
-        payload: "DroppedData",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-    },
-    EventDescriptor {
-        id: EventId::BorderPointerPressed,
-        name: "PointerPressed",
-        field: "on_pointer_pressed",
-        payload: "PointerEventInfo",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-    },
-    EventDescriptor {
-        id: EventId::BorderPointerMoved,
-        name: "PointerMoved",
-        field: "on_pointer_moved",
-        payload: "PointerEventInfo",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-    },
-    EventDescriptor {
-        id: EventId::BorderPointerEntered,
-        name: "PointerEntered",
-        field: "on_pointer_entered",
-        payload: "PointerEventInfo",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-    },
-    EventDescriptor {
-        id: EventId::BorderPointerExited,
-        name: "PointerExited",
-        field: "on_pointer_exited",
-        payload: "PointerEventInfo",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-    },
-    EventDescriptor {
-        id: EventId::BorderPointerReleased,
-        name: "PointerReleased",
-        field: "on_pointer_released",
-        payload: "PointerEventInfo",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-    },
-    EventDescriptor {
-        id: EventId::BorderPointerCaptureLost,
-        name: "PointerCaptureLost",
-        field: "on_pointer_capture_lost",
-        payload: "Unit",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-    },
-    EventDescriptor {
-        id: EventId::BorderPointerCanceled,
-        name: "PointerCanceled",
-        field: "on_pointer_canceled",
-        payload: "Unit",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-    },
-];
-const BORDER_SLOTS: &[SlotDescriptor] = &[];
-const BREADCRUMB_BAR_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::BreadcrumbBarItemsSource,
-    name: "ItemsSource",
-    field: "items_source",
-    value: "StrList",
-    interface: "Microsoft.UI.Xaml.Controls.IBreadcrumbBar",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const BREADCRUMB_BAR_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::BreadcrumbBarItemClicked,
-    name: "ItemClicked",
-    field: "on_item_clicked",
-    payload: "Str",
-    interface: "Microsoft.UI.Xaml.Controls.IBreadcrumbBar",
-}];
-const BREADCRUMB_BAR_SLOTS: &[SlotDescriptor] = &[];
-const STACK_PANEL_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::StackPanelOrientation,
-        name: "Orientation",
-        field: "orientation",
-        value: "Orientation",
-        interface: "Microsoft.UI.Xaml.Controls.IStackPanel",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::StackPanelSpacing,
-        name: "Spacing",
-        field: "spacing",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.IStackPanel",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const STACK_PANEL_EVENTS: &[EventDescriptor] = &[];
-const STACK_PANEL_SLOTS: &[SlotDescriptor] = &[];
-const VARIABLE_SIZED_WRAP_GRID_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::VariableSizedWrapGridItemWidth,
-        name: "ItemWidth",
-        field: "item_width",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.IVariableSizedWrapGrid",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::VariableSizedWrapGridItemHeight,
-        name: "ItemHeight",
-        field: "item_height",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.IVariableSizedWrapGrid",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::VariableSizedWrapGridOrientation,
-        name: "Orientation",
-        field: "orientation",
-        value: "Orientation",
-        interface: "Microsoft.UI.Xaml.Controls.IVariableSizedWrapGrid",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const VARIABLE_SIZED_WRAP_GRID_EVENTS: &[EventDescriptor] = &[];
-const VARIABLE_SIZED_WRAP_GRID_SLOTS: &[SlotDescriptor] = &[];
-const GRID_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::GridRowSpacing,
-        name: "RowSpacing",
-        field: "row_spacing",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.IGrid",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::GridColumnSpacing,
-        name: "ColumnSpacing",
-        field: "column_spacing",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.IGrid",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::GridKeyboardAccelerators,
-        name: "KeyboardAccelerators",
-        field: "key_accelerators",
-        value: "KeyAccelerators",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::GridBackground,
-        name: "Background",
-        field: "background",
-        value: "Brush",
-        interface: "Microsoft.UI.Xaml.Controls.IPanel",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const GRID_EVENTS: &[EventDescriptor] = &[];
-const GRID_SLOTS: &[SlotDescriptor] = &[];
-const TEXT_BOX_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::TextBoxText,
-        name: "Text",
-        field: "text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ITextBox",
-        clearable: true,
-        feedback: Some("TextChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBoxPlaceholderText,
-        name: "PlaceholderText",
-        field: "placeholder_text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ITextBox",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBoxIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBoxAcceptsReturn,
-        name: "AcceptsReturn",
-        field: "accepts_return",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ITextBox",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBoxTextWrapping,
-        name: "TextWrapping",
-        field: "text_wrapping",
-        value: "TextWrapping",
-        interface: "Microsoft.UI.Xaml.Controls.ITextBox",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBoxBackground,
-        name: "Background",
-        field: "background",
-        value: "Brush",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBoxBorderBrush,
-        name: "BorderBrush",
-        field: "border_brush",
-        value: "Brush",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TextBoxBorderThickness,
-        name: "BorderThickness",
-        field: "border_thickness",
-        value: "Thickness",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const TEXT_BOX_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::TextBoxTextChanged,
-    name: "TextChanged",
-    field: "on_text_changed",
-    payload: "Str",
-    interface: "Microsoft.UI.Xaml.Controls.ITextBox",
-}];
-const TEXT_BOX_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::TextBoxHeader,
-    name: "Header",
-    interface: "Microsoft.UI.Xaml.Controls.ITextBox",
-    target: "inspectable",
-    collection: false,
-}];
-const AUTO_SUGGEST_BOX_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::AutoSuggestBoxText,
-        name: "Text",
-        field: "text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IAutoSuggestBox",
-        clearable: true,
-        feedback: Some("TextChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::AutoSuggestBoxItemsSource,
-        name: "ItemsSource",
-        field: "items_source",
-        value: "StrList",
-        interface: "Microsoft.UI.Xaml.Controls.IItemsControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::AutoSuggestBoxPlaceholderText,
-        name: "PlaceholderText",
-        field: "placeholder_text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IAutoSuggestBox",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::AutoSuggestBoxIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const AUTO_SUGGEST_BOX_EVENTS: &[EventDescriptor] = &[
-    EventDescriptor {
-        id: EventId::AutoSuggestBoxTextChanged,
-        name: "TextChanged",
-        field: "on_text_changed",
-        payload: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IAutoSuggestBox",
-    },
-    EventDescriptor {
-        id: EventId::AutoSuggestBoxSuggestionChosen,
-        name: "SuggestionChosen",
-        field: "on_suggestion_chosen",
-        payload: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IAutoSuggestBox",
-    },
-];
-const AUTO_SUGGEST_BOX_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::AutoSuggestBoxHeader,
-    name: "Header",
-    interface: "Microsoft.UI.Xaml.Controls.IAutoSuggestBox",
-    target: "inspectable",
-    collection: false,
-}];
-const PASSWORD_BOX_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::PasswordBoxPassword,
-        name: "Password",
-        field: "password",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IPasswordBox",
-        clearable: true,
-        feedback: Some("PasswordChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::PasswordBoxPlaceholderText,
-        name: "PlaceholderText",
-        field: "placeholder_text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IPasswordBox",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::PasswordBoxPasswordRevealMode,
-        name: "PasswordRevealMode",
-        field: "password_reveal_mode",
-        value: "PasswordRevealMode",
-        interface: "Microsoft.UI.Xaml.Controls.IPasswordBox",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::PasswordBoxIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const PASSWORD_BOX_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::PasswordBoxPasswordChanged,
-    name: "PasswordChanged",
-    field: "on_password_changed",
-    payload: "Str",
-    interface: "Microsoft.UI.Xaml.Controls.IPasswordBox",
-}];
-const PASSWORD_BOX_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::PasswordBoxHeader,
-    name: "Header",
-    interface: "Microsoft.UI.Xaml.Controls.IPasswordBox",
-    target: "inspectable",
-    collection: false,
-}];
-const NUMBER_BOX_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::NumberBoxMinimum,
-        name: "Minimum",
-        field: "minimum",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.INumberBox",
-        clearable: true,
-        feedback: Some("ValueChanged"),
-        feedback_contract: Some("synchronous_normalized"),
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NumberBoxMaximum,
-        name: "Maximum",
-        field: "maximum",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.INumberBox",
-        clearable: true,
-        feedback: Some("ValueChanged"),
-        feedback_contract: Some("synchronous_normalized"),
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NumberBoxValue,
-        name: "Value",
-        field: "value",
-        value: "OptionalF64",
-        interface: "Microsoft.UI.Xaml.Controls.INumberBox",
-        clearable: true,
-        feedback: Some("ValueChanged"),
-        feedback_contract: Some("synchronous_normalized"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NumberBoxIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const NUMBER_BOX_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::NumberBoxValueChanged,
-    name: "ValueChanged",
-    field: "on_value_changed",
-    payload: "OptionalF64",
-    interface: "Microsoft.UI.Xaml.Controls.INumberBox",
-}];
-const NUMBER_BOX_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::NumberBoxHeader,
-    name: "Header",
-    interface: "Microsoft.UI.Xaml.Controls.INumberBox",
-    target: "inspectable",
-    collection: false,
-}];
-const SLIDER_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::SliderMinimum,
-        name: "Minimum",
-        field: "minimum",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.IRangeBase",
-        clearable: true,
-        feedback: Some("ValueChanged"),
-        feedback_contract: Some("synchronous_normalized"),
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::SliderMaximum,
-        name: "Maximum",
-        field: "maximum",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.IRangeBase",
-        clearable: true,
-        feedback: Some("ValueChanged"),
-        feedback_contract: Some("synchronous_normalized"),
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::SliderValue,
-        name: "Value",
-        field: "value",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.IRangeBase",
-        clearable: true,
-        feedback: Some("ValueChanged"),
-        feedback_contract: Some("synchronous_normalized"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::SliderIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::SliderStepFrequency,
-        name: "StepFrequency",
-        field: "step_frequency",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.ISlider",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::SliderOrientation,
-        name: "Orientation",
-        field: "orientation",
-        value: "Orientation",
-        interface: "Microsoft.UI.Xaml.Controls.ISlider",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const SLIDER_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::SliderValueChanged,
-    name: "ValueChanged",
-    field: "on_value_changed",
-    payload: "F64",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.IRangeBase",
-}];
-const SLIDER_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::SliderHeader,
-    name: "Header",
-    interface: "Microsoft.UI.Xaml.Controls.ISlider",
-    target: "inspectable",
-    collection: false,
-}];
-const TITLE_BAR_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::TitleBarTitle,
-        name: "Title",
-        field: "title",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ITitleBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TitleBarSubtitle,
-        name: "Subtitle",
-        field: "subtitle",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ITitleBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TitleBarIsBackButtonVisible,
-        name: "IsBackButtonVisible",
-        field: "is_back_button_visible",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ITitleBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TitleBarIsBackButtonEnabled,
-        name: "IsBackButtonEnabled",
-        field: "is_back_button_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ITitleBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TitleBarIsPaneToggleButtonVisible,
-        name: "IsPaneToggleButtonVisible",
-        field: "is_pane_toggle_button_visible",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ITitleBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const TITLE_BAR_EVENTS: &[EventDescriptor] = &[
-    EventDescriptor {
-        id: EventId::TitleBarBackRequested,
-        name: "BackRequested",
-        field: "on_back_requested",
-        payload: "Unit",
-        interface: "Microsoft.UI.Xaml.Controls.ITitleBar",
-    },
-    EventDescriptor {
-        id: EventId::TitleBarPaneToggleRequested,
-        name: "PaneToggleRequested",
-        field: "on_pane_toggle_requested",
-        payload: "Unit",
-        interface: "Microsoft.UI.Xaml.Controls.ITitleBar",
-    },
-];
-const TITLE_BAR_SLOTS: &[SlotDescriptor] = &[
-    SlotDescriptor {
-        id: SlotId::TitleBarContent,
-        name: "Content",
-        interface: "Microsoft.UI.Xaml.Controls.ITitleBar",
-        target: "ui_element",
-        collection: false,
-    },
-    SlotDescriptor {
-        id: SlotId::TitleBarRightHeader,
-        name: "RightHeader",
-        interface: "Microsoft.UI.Xaml.Controls.ITitleBar",
-        target: "ui_element",
-        collection: false,
-    },
-];
-const NAVIGATION_VIEW_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewPaneDisplayMode,
-        name: "PaneDisplayMode",
-        field: "pane_display_mode",
-        value: "NavigationViewPaneDisplayMode",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView2",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewIsPaneToggleButtonVisible,
-        name: "IsPaneToggleButtonVisible",
-        field: "is_pane_toggle_button_visible",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewIsBackButtonVisible,
-        name: "IsBackButtonVisible",
-        field: "is_back_button_visible",
-        value: "NavigationViewBackButtonVisible",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView2",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewIsSettingsVisible,
-        name: "IsSettingsVisible",
-        field: "is_settings_visible",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewAlwaysShowHeader,
-        name: "AlwaysShowHeader",
-        field: "always_show_header",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewPaneTitle,
-        name: "PaneTitle",
-        field: "pane_title",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView2",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewOpenPaneLength,
-        name: "OpenPaneLength",
-        field: "open_pane_length",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewIsPaneOpen,
-        name: "IsPaneOpen",
-        field: "is_pane_open",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView",
-        clearable: true,
-        feedback: Some("IsPaneOpenChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-];
-const NAVIGATION_VIEW_EVENTS: &[EventDescriptor] = &[
-    EventDescriptor {
-        id: EventId::NavigationViewIsPaneOpenChanged,
-        name: "IsPaneOpenChanged",
-        field: "on_is_pane_open_changed",
-        payload: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView",
-    },
-    EventDescriptor {
-        id: EventId::NavigationViewDisplayModeChanged,
-        name: "DisplayModeChanged",
-        field: "on_display_mode_changed",
-        payload: "NavigationViewDisplayMode",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView",
-    },
-    EventDescriptor {
-        id: EventId::NavigationViewSelectionChanged,
-        name: "SelectionChanged",
-        field: "on_selected_tag_changed",
-        payload: "SelectionChange",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView",
-    },
-];
-const NAVIGATION_VIEW_SLOTS: &[SlotDescriptor] = &[
-    SlotDescriptor {
-        id: SlotId::NavigationViewContent,
-        name: "Content",
-        interface: "Microsoft.UI.Xaml.Controls.IContentControl",
-        target: "inspectable",
-        collection: false,
-    },
-    SlotDescriptor {
-        id: SlotId::NavigationViewHeader,
-        name: "Header",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView",
-        target: "inspectable",
-        collection: false,
-    },
-    SlotDescriptor {
-        id: SlotId::NavigationViewPaneCustomContent,
-        name: "PaneCustomContent",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView2",
-        target: "ui_element",
-        collection: false,
-    },
-    SlotDescriptor {
-        id: SlotId::NavigationViewPaneFooter,
-        name: "PaneFooter",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView",
-        target: "ui_element",
-        collection: false,
-    },
-    SlotDescriptor {
-        id: SlotId::NavigationViewMenuItems,
-        name: "MenuItems",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationView",
-        target: "inspectable",
-        collection: true,
-    },
-];
-const NAVIGATION_VIEW_ITEM_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewItemTag,
-        name: "Tag",
-        field: "tag",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.IFrameworkElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewItemIsSelected,
-        name: "IsSelected",
-        field: "is_selected",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationViewItemBase2",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewItemSelectsOnInvoked,
-        name: "SelectsOnInvoked",
-        field: "selects_on_invoked",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationViewItem2",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::NavigationViewItemIsExpanded,
-        name: "IsExpanded",
-        field: "is_expanded",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationViewItem2",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const NAVIGATION_VIEW_ITEM_EVENTS: &[EventDescriptor] = &[];
-const NAVIGATION_VIEW_ITEM_SLOTS: &[SlotDescriptor] = &[
-    SlotDescriptor {
-        id: SlotId::NavigationViewItemContent,
-        name: "Content",
-        interface: "Microsoft.UI.Xaml.Controls.IContentControl",
-        target: "inspectable",
-        collection: false,
-    },
-    SlotDescriptor {
-        id: SlotId::NavigationViewItemIcon,
-        name: "Icon",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationViewItem",
-        target: "icon_element",
-        collection: false,
-    },
-    SlotDescriptor {
-        id: SlotId::NavigationViewItemMenuItems,
-        name: "MenuItems",
-        interface: "Microsoft.UI.Xaml.Controls.INavigationViewItem2",
-        target: "inspectable",
-        collection: true,
-    },
-];
-const SPLIT_VIEW_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::SplitViewOpenPaneLength,
-        name: "OpenPaneLength",
-        field: "open_pane_length",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.ISplitView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::SplitViewCompactPaneLength,
-        name: "CompactPaneLength",
-        field: "compact_pane_length",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.ISplitView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::SplitViewDisplayMode,
-        name: "DisplayMode",
-        field: "display_mode",
-        value: "SplitViewDisplayMode",
-        interface: "Microsoft.UI.Xaml.Controls.ISplitView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::SplitViewIsPaneOpen,
-        name: "IsPaneOpen",
-        field: "is_pane_open",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ISplitView",
-        clearable: true,
-        feedback: Some("PaneClosed"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-];
-const SPLIT_VIEW_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::SplitViewPaneClosed,
-    name: "PaneClosed",
-    field: "on_pane_closed",
-    payload: "Bool",
-    interface: "Microsoft.UI.Xaml.Controls.ISplitView",
-}];
-const SPLIT_VIEW_SLOTS: &[SlotDescriptor] = &[
-    SlotDescriptor {
-        id: SlotId::SplitViewPane,
-        name: "Pane",
-        interface: "Microsoft.UI.Xaml.Controls.ISplitView",
-        target: "ui_element",
-        collection: false,
-    },
-    SlotDescriptor {
-        id: SlotId::SplitViewContent,
-        name: "Content",
-        interface: "Microsoft.UI.Xaml.Controls.ISplitView",
-        target: "ui_element",
-        collection: false,
-    },
-];
-const PROGRESS_BAR_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ProgressBarMinimum,
-        name: "Minimum",
-        field: "minimum",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.IRangeBase",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ProgressBarMaximum,
-        name: "Maximum",
-        field: "maximum",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.IRangeBase",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ProgressBarValue,
-        name: "Value",
-        field: "value",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.IRangeBase",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ProgressBarIsIndeterminate,
-        name: "IsIndeterminate",
-        field: "is_indeterminate",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IProgressBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ProgressBarShowError,
-        name: "ShowError",
-        field: "show_error",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IProgressBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ProgressBarShowPaused,
-        name: "ShowPaused",
-        field: "show_paused",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IProgressBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ProgressBarIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const PROGRESS_BAR_EVENTS: &[EventDescriptor] = &[];
-const PROGRESS_BAR_SLOTS: &[SlotDescriptor] = &[];
-const TOGGLE_SWITCH_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ToggleSwitchIsOn,
-        name: "IsOn",
-        field: "is_on",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IToggleSwitch",
-        clearable: true,
-        feedback: Some("Toggled"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ToggleSwitchIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const TOGGLE_SWITCH_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::ToggleSwitchToggled,
-    name: "Toggled",
-    field: "on_toggled",
-    payload: "Bool",
-    interface: "Microsoft.UI.Xaml.Controls.IToggleSwitch",
-}];
-const TOGGLE_SWITCH_SLOTS: &[SlotDescriptor] = &[
-    SlotDescriptor {
-        id: SlotId::ToggleSwitchHeader,
-        name: "Header",
-        interface: "Microsoft.UI.Xaml.Controls.IToggleSwitch",
-        target: "inspectable",
-        collection: false,
-    },
-    SlotDescriptor {
-        id: SlotId::ToggleSwitchOnContent,
-        name: "OnContent",
-        interface: "Microsoft.UI.Xaml.Controls.IToggleSwitch",
-        target: "inspectable",
-        collection: false,
-    },
-    SlotDescriptor {
-        id: SlotId::ToggleSwitchOffContent,
-        name: "OffContent",
-        interface: "Microsoft.UI.Xaml.Controls.IToggleSwitch",
-        target: "inspectable",
-        collection: false,
-    },
-];
-const CHECK_BOX_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::CheckBoxIsChecked,
-        name: "IsChecked",
-        field: "is_checked",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.IToggleButton",
-        clearable: true,
-        feedback: Some("IsCheckedChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::CheckBoxIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const CHECK_BOX_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::CheckBoxIsCheckedChanged,
-    name: "IsCheckedChanged",
-    field: "on_is_checked_changed",
-    payload: "Bool",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.IToggleButton",
-}];
-const CHECK_BOX_SLOTS: &[SlotDescriptor] = &[];
-const TOGGLE_BUTTON_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ToggleButtonIsChecked,
-        name: "IsChecked",
-        field: "is_checked",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.IToggleButton",
-        clearable: true,
-        feedback: Some("IsCheckedChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ToggleButtonIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const TOGGLE_BUTTON_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::ToggleButtonIsCheckedChanged,
-    name: "IsCheckedChanged",
-    field: "on_is_checked_changed",
-    payload: "Bool",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.IToggleButton",
-}];
-const TOGGLE_BUTTON_SLOTS: &[SlotDescriptor] = &[];
-const RADIO_BUTTON_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::RadioButtonGroupName,
-        name: "GroupName",
-        field: "group_name",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IRadioButton",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RadioButtonIsChecked,
-        name: "IsChecked",
-        field: "is_checked",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.IToggleButton",
-        clearable: true,
-        feedback: Some("Checked"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RadioButtonIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const RADIO_BUTTON_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::RadioButtonChecked,
-    name: "Checked",
-    field: "on_checked",
-    payload: "Bool",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.IToggleButton",
-}];
-const RADIO_BUTTON_SLOTS: &[SlotDescriptor] = &[];
-const RADIO_BUTTONS_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::RadioButtonsItemsSource,
-        name: "ItemsSource",
-        field: "items_source",
-        value: "StrList",
-        interface: "Microsoft.UI.Xaml.Controls.IRadioButtons",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RadioButtonsSelectedIndex,
-        name: "SelectedIndex",
-        field: "selected_index",
-        value: "SelectionIndex",
-        interface: "Microsoft.UI.Xaml.Controls.IRadioButtons",
-        clearable: true,
-        feedback: Some("SelectionChanged"),
-        feedback_contract: Some("synchronous_normalized"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RadioButtonsMaxColumns,
-        name: "MaxColumns",
-        field: "max_columns",
-        value: "I32",
-        interface: "Microsoft.UI.Xaml.Controls.IRadioButtons",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const RADIO_BUTTONS_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::RadioButtonsSelectionChanged,
-    name: "SelectionChanged",
-    field: "on_selection_changed",
-    payload: "SelectionIndex",
-    interface: "Microsoft.UI.Xaml.Controls.IRadioButtons",
-}];
-const RADIO_BUTTONS_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::RadioButtonsHeader,
-    name: "Header",
-    interface: "Microsoft.UI.Xaml.Controls.IRadioButtons",
-    target: "inspectable",
-    collection: false,
-}];
-const ITEMS_REPEATER_PROPERTIES: &[PropertyDescriptor] = &[];
-const ITEMS_REPEATER_EVENTS: &[EventDescriptor] = &[];
-const ITEMS_REPEATER_SLOTS: &[SlotDescriptor] = &[];
-const INFO_BADGE_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::InfoBadgeValue,
-    name: "Value",
-    field: "value",
-    value: "I32",
-    interface: "Microsoft.UI.Xaml.Controls.IInfoBadge",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const INFO_BADGE_EVENTS: &[EventDescriptor] = &[];
-const INFO_BADGE_SLOTS: &[SlotDescriptor] = &[];
-const INFO_BAR_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::InfoBarTitle,
-        name: "Title",
-        field: "title",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IInfoBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::InfoBarMessage,
-        name: "Message",
-        field: "message",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IInfoBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::InfoBarSeverity,
-        name: "Severity",
-        field: "severity",
-        value: "InfoBarSeverity",
-        interface: "Microsoft.UI.Xaml.Controls.IInfoBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::InfoBarIsOpen,
-        name: "IsOpen",
-        field: "is_open",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IInfoBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::InfoBarIsClosable,
-        name: "IsClosable",
-        field: "is_closable",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IInfoBar",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const INFO_BAR_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::InfoBarClosed,
-    name: "Closed",
-    field: "on_closed",
-    payload: "Unit",
-    interface: "Microsoft.UI.Xaml.Controls.IInfoBar",
-}];
-const INFO_BAR_SLOTS: &[SlotDescriptor] = &[];
-const PERSON_PICTURE_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::PersonPictureDisplayName,
-        name: "DisplayName",
-        field: "display_name",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IPersonPicture",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::PersonPictureInitials,
-        name: "Initials",
-        field: "initials",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IPersonPicture",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const PERSON_PICTURE_EVENTS: &[EventDescriptor] = &[];
-const PERSON_PICTURE_SLOTS: &[SlotDescriptor] = &[];
-const SCROLL_VIEWER_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ScrollViewerHorizontalScrollBarVisibility,
-        name: "HorizontalScrollBarVisibility",
-        field: "horizontal_scroll_bar_visibility",
-        value: "ScrollBarVisibility",
-        interface: "Microsoft.UI.Xaml.Controls.IScrollViewer",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ScrollViewerVerticalScrollBarVisibility,
-        name: "VerticalScrollBarVisibility",
-        field: "vertical_scroll_bar_visibility",
-        value: "ScrollBarVisibility",
-        interface: "Microsoft.UI.Xaml.Controls.IScrollViewer",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const SCROLL_VIEWER_EVENTS: &[EventDescriptor] = &[];
-const SCROLL_VIEWER_SLOTS: &[SlotDescriptor] = &[];
-const SCROLL_VIEW_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ScrollViewHorizontalScrollBarVisibility,
-        name: "HorizontalScrollBarVisibility",
-        field: "horizontal_scroll_bar_visibility",
-        value: "ScrollingScrollBarVisibility",
-        interface: "Microsoft.UI.Xaml.Controls.IScrollView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ScrollViewVerticalScrollBarVisibility,
-        name: "VerticalScrollBarVisibility",
-        field: "vertical_scroll_bar_visibility",
-        value: "ScrollingScrollBarVisibility",
-        interface: "Microsoft.UI.Xaml.Controls.IScrollView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const SCROLL_VIEW_EVENTS: &[EventDescriptor] = &[];
-const SCROLL_VIEW_SLOTS: &[SlotDescriptor] = &[];
-const IMAGE_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ImageSource,
-        name: "Source",
-        field: "source",
-        value: "ImageValue",
-        interface: "Microsoft.UI.Xaml.Controls.IImage",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ImageStretch,
-        name: "Stretch",
-        field: "stretch",
-        value: "Stretch",
-        interface: "Microsoft.UI.Xaml.Controls.IImage",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const IMAGE_EVENTS: &[EventDescriptor] = &[
-    EventDescriptor {
-        id: EventId::ImageImageOpened,
-        name: "ImageOpened",
-        field: "on_opened",
-        payload: "Unit",
-        interface: "Microsoft.UI.Xaml.Controls.IImage",
-    },
-    EventDescriptor {
-        id: EventId::ImageImageFailed,
-        name: "ImageFailed",
-        field: "on_failed",
-        payload: "Unit",
-        interface: "Microsoft.UI.Xaml.Controls.IImage",
-    },
-];
-const IMAGE_SLOTS: &[SlotDescriptor] = &[];
-const PROGRESS_RING_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ProgressRingMinimum,
-        name: "Minimum",
-        field: "minimum",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.IProgressRing",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ProgressRingMaximum,
-        name: "Maximum",
-        field: "maximum",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.IProgressRing",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ProgressRingValue,
-        name: "Value",
-        field: "value",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.IProgressRing",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ProgressRingIsIndeterminate,
-        name: "IsIndeterminate",
-        field: "is_indeterminate",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IProgressRing",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ProgressRingIsActive,
-        name: "IsActive",
-        field: "is_active",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IProgressRing",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ProgressRingIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const PROGRESS_RING_EVENTS: &[EventDescriptor] = &[];
-const PROGRESS_RING_SLOTS: &[SlotDescriptor] = &[];
-const LIST_BOX_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::ListBoxIsEnabled,
-    name: "IsEnabled",
-    field: "is_enabled",
-    value: "Bool",
-    interface: "Microsoft.UI.Xaml.Controls.IControl",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const LIST_BOX_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::ListBoxSelectionChanged,
-    name: "SelectionChanged",
-    field: "on_selected_tag_changed",
-    payload: "SelectionChange",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.ISelector",
-}];
-const LIST_BOX_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::ListBoxItems,
-    name: "Items",
-    interface: "Microsoft.UI.Xaml.Controls.IItemsControl",
-    target: "inspectable",
-    collection: true,
-}];
-const RECTANGLE_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::RectangleFill,
-        name: "Fill",
-        field: "fill",
-        value: "Brush",
-        interface: "Microsoft.UI.Xaml.Shapes.IShape",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RectangleStroke,
-        name: "Stroke",
-        field: "stroke",
-        value: "Brush",
-        interface: "Microsoft.UI.Xaml.Shapes.IShape",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RectangleStrokeThickness,
-        name: "StrokeThickness",
-        field: "stroke_thickness",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Shapes.IShape",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RectangleRadiusX,
-        name: "RadiusX",
-        field: "radius_x",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Shapes.IRectangle",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RectangleRadiusY,
-        name: "RadiusY",
-        field: "radius_y",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Shapes.IRectangle",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const RECTANGLE_EVENTS: &[EventDescriptor] = &[];
-const RECTANGLE_SLOTS: &[SlotDescriptor] = &[];
-const ELLIPSE_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::EllipseFill,
-        name: "Fill",
-        field: "fill",
-        value: "Brush",
-        interface: "Microsoft.UI.Xaml.Shapes.IShape",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::EllipseStroke,
-        name: "Stroke",
-        field: "stroke",
-        value: "Brush",
-        interface: "Microsoft.UI.Xaml.Shapes.IShape",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::EllipseStrokeThickness,
-        name: "StrokeThickness",
-        field: "stroke_thickness",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Shapes.IShape",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const ELLIPSE_EVENTS: &[EventDescriptor] = &[];
-const ELLIPSE_SLOTS: &[SlotDescriptor] = &[];
-const LINE_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::LineStroke,
-        name: "Stroke",
-        field: "stroke",
-        value: "Brush",
-        interface: "Microsoft.UI.Xaml.Shapes.IShape",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::LineStrokeThickness,
-        name: "StrokeThickness",
-        field: "stroke_thickness",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Shapes.IShape",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::LineX1,
-        name: "X1",
-        field: "x1",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Shapes.ILine",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::LineY1,
-        name: "Y1",
-        field: "y1",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Shapes.ILine",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::LineX2,
-        name: "X2",
-        field: "x2",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Shapes.ILine",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::LineY2,
-        name: "Y2",
-        field: "y2",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Shapes.ILine",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const LINE_EVENTS: &[EventDescriptor] = &[];
-const LINE_SLOTS: &[SlotDescriptor] = &[];
-const SYMBOL_ICON_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::SymbolIconSymbol,
-    name: "Symbol",
-    field: "symbol",
-    value: "Symbol",
-    interface: "Microsoft.UI.Xaml.Controls.ISymbolIcon",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const SYMBOL_ICON_EVENTS: &[EventDescriptor] = &[];
-const SYMBOL_ICON_SLOTS: &[SlotDescriptor] = &[];
-const IMAGE_ICON_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::ImageIconSource,
-    name: "Source",
-    field: "source",
-    value: "ImageValue",
-    interface: "Microsoft.UI.Xaml.Controls.IImageIcon",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const IMAGE_ICON_EVENTS: &[EventDescriptor] = &[];
-const IMAGE_ICON_SLOTS: &[SlotDescriptor] = &[];
-const FONT_ICON_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::FontIconGlyph,
-    name: "Glyph",
-    field: "glyph",
-    value: "Str",
-    interface: "Microsoft.UI.Xaml.Controls.IFontIcon",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const FONT_ICON_EVENTS: &[EventDescriptor] = &[];
-const FONT_ICON_SLOTS: &[SlotDescriptor] = &[];
-const BITMAP_ICON_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::BitmapIconUriSource,
-        name: "UriSource",
-        field: "uri_source",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IBitmapIcon",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::BitmapIconShowAsMonochrome,
-        name: "ShowAsMonochrome",
-        field: "show_as_monochrome",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IBitmapIcon",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const BITMAP_ICON_EVENTS: &[EventDescriptor] = &[];
-const BITMAP_ICON_SLOTS: &[SlotDescriptor] = &[];
-const PATH_ICON_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::PathIconData,
-    name: "Data",
-    field: "data",
-    value: "Str",
-    interface: "Microsoft.UI.Xaml.Controls.IPathIcon",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const PATH_ICON_EVENTS: &[EventDescriptor] = &[];
-const PATH_ICON_SLOTS: &[SlotDescriptor] = &[];
-const LIST_BOX_ITEM_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ListBoxItemTag,
-        name: "Tag",
-        field: "tag",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.IFrameworkElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ListBoxItemIsSelected,
-        name: "IsSelected",
-        field: "is_selected",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.ISelectorItem",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const LIST_BOX_ITEM_EVENTS: &[EventDescriptor] = &[];
-const LIST_BOX_ITEM_SLOTS: &[SlotDescriptor] = &[];
-const RATING_CONTROL_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::RatingControlMaxRating,
-        name: "MaxRating",
-        field: "max_rating",
-        value: "I32",
-        interface: "Microsoft.UI.Xaml.Controls.IRatingControl",
-        clearable: true,
-        feedback: Some("ValueChanged"),
-        feedback_contract: Some("synchronous_normalized"),
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RatingControlValue,
-        name: "Value",
-        field: "value",
-        value: "OptionalF64",
-        interface: "Microsoft.UI.Xaml.Controls.IRatingControl",
-        clearable: true,
-        feedback: Some("ValueChanged"),
-        feedback_contract: Some("synchronous_normalized"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RatingControlCaption,
-        name: "Caption",
-        field: "caption",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IRatingControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RatingControlIsReadOnly,
-        name: "IsReadOnly",
-        field: "is_read_only",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IRatingControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const RATING_CONTROL_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::RatingControlValueChanged,
-    name: "ValueChanged",
-    field: "on_value_changed",
-    payload: "OptionalF64",
-    interface: "Microsoft.UI.Xaml.Controls.IRatingControl",
-}];
-const RATING_CONTROL_SLOTS: &[SlotDescriptor] = &[];
-const EXPANDER_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::ExpanderIsExpanded,
-    name: "IsExpanded",
-    field: "is_expanded",
-    value: "Bool",
-    interface: "Microsoft.UI.Xaml.Controls.IExpander",
-    clearable: true,
-    feedback: Some("IsExpandedChanged"),
-    feedback_contract: Some("synchronous_exact"),
-    observes_feedback: true,
-}];
-const EXPANDER_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::ExpanderIsExpandedChanged,
-    name: "IsExpandedChanged",
-    field: "on_is_expanded_changed",
-    payload: "Bool",
-    interface: "Microsoft.UI.Xaml.Controls.IExpander",
-}];
-const EXPANDER_SLOTS: &[SlotDescriptor] = &[
-    SlotDescriptor {
-        id: SlotId::ExpanderHeader,
-        name: "Header",
-        interface: "Microsoft.UI.Xaml.Controls.IExpander",
-        target: "inspectable",
-        collection: false,
-    },
-    SlotDescriptor {
-        id: SlotId::ExpanderContent,
-        name: "Content",
-        interface: "Microsoft.UI.Xaml.Controls.IContentControl",
-        target: "inspectable",
-        collection: false,
-    },
-];
-const COMBO_BOX_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ComboBoxItemsSource,
-        name: "ItemsSource",
-        field: "items_source",
-        value: "StrList",
-        interface: "Microsoft.UI.Xaml.Controls.IItemsControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ComboBoxSelectedIndex,
-        name: "SelectedIndex",
-        field: "selected_index",
-        value: "SelectionIndex",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.ISelector",
-        clearable: true,
-        feedback: Some("SelectionChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ComboBoxPlaceholderText,
-        name: "PlaceholderText",
-        field: "placeholder_text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IComboBox",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ComboBoxIsEditable,
-        name: "IsEditable",
-        field: "is_editable",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IComboBox",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ComboBoxIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const COMBO_BOX_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::ComboBoxSelectionChanged,
-    name: "SelectionChanged",
-    field: "on_selection_changed",
-    payload: "SelectionIndex",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.ISelector",
-}];
-const COMBO_BOX_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::ComboBoxHeader,
-    name: "Header",
-    interface: "Microsoft.UI.Xaml.Controls.IComboBox",
-    target: "inspectable",
-    collection: false,
-}];
-const PIVOT_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::PivotSelectedIndex,
-        name: "SelectedIndex",
-        field: "selected_index",
-        value: "SelectionIndex",
-        interface: "Microsoft.UI.Xaml.Controls.IPivot",
-        clearable: true,
-        feedback: Some("SelectionChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::PivotTitle,
-        name: "Title",
-        field: "title",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IPivot",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const PIVOT_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::PivotSelectionChanged,
-    name: "SelectionChanged",
-    field: "on_selection_changed",
-    payload: "SelectionIndex",
-    interface: "Microsoft.UI.Xaml.Controls.IPivot",
-}];
-const PIVOT_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::PivotItems,
-    name: "Items",
-    interface: "Microsoft.UI.Xaml.Controls.IItemsControl",
-    target: "inspectable",
-    collection: true,
-}];
-const PIVOT_ITEM_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::PivotItemHeader,
-    name: "Header",
-    field: "header",
-    value: "Str",
-    interface: "Microsoft.UI.Xaml.Controls.IPivotItem",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const PIVOT_ITEM_EVENTS: &[EventDescriptor] = &[];
-const PIVOT_ITEM_SLOTS: &[SlotDescriptor] = &[];
-const FLIP_VIEW_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::FlipViewSelectedIndex,
-    name: "SelectedIndex",
-    field: "selected_index",
-    value: "SelectionIndex",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.ISelector",
-    clearable: true,
-    feedback: Some("SelectionChanged"),
-    feedback_contract: Some("synchronous_exact"),
-    observes_feedback: true,
-}];
-const FLIP_VIEW_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::FlipViewSelectionChanged,
-    name: "SelectionChanged",
-    field: "on_selection_changed",
-    payload: "SelectionIndex",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.ISelector",
-}];
-const FLIP_VIEW_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::FlipViewItems,
-    name: "Items",
-    interface: "Microsoft.UI.Xaml.Controls.IItemsControl",
-    target: "inspectable",
-    collection: true,
-}];
-const SELECTOR_BAR_PROPERTIES: &[PropertyDescriptor] = &[];
-const SELECTOR_BAR_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::SelectorBarSelectionChanged,
-    name: "SelectionChanged",
-    field: "on_selected_text_changed",
-    payload: "SelectionChange",
-    interface: "Microsoft.UI.Xaml.Controls.ISelectorBar",
-}];
-const SELECTOR_BAR_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::SelectorBarItems,
-    name: "Items",
-    interface: "Microsoft.UI.Xaml.Controls.ISelectorBar",
-    target: "inspectable",
-    collection: true,
-}];
-const SELECTOR_BAR_ITEM_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::SelectorBarItemText,
-        name: "Text",
-        field: "text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ISelectorBarItem",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::SelectorBarItemIsSelected,
-        name: "IsSelected",
-        field: "is_selected",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IItemContainer",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const SELECTOR_BAR_ITEM_EVENTS: &[EventDescriptor] = &[];
-const SELECTOR_BAR_ITEM_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::SelectorBarItemIcon,
-    name: "Icon",
-    interface: "Microsoft.UI.Xaml.Controls.ISelectorBarItem",
-    target: "icon_element",
-    collection: false,
-}];
-const TAB_VIEW_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::TabViewSelectedIndex,
-        name: "SelectedIndex",
-        field: "selected_index",
-        value: "SelectionIndex",
-        interface: "Microsoft.UI.Xaml.Controls.ITabView",
-        clearable: true,
-        feedback: Some("SelectionChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TabViewCanReorderTabs,
-        name: "CanReorderTabs",
-        field: "can_reorder_tabs",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ITabView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TabViewIsAddTabButtonVisible,
-        name: "IsAddTabButtonVisible",
-        field: "is_add_tab_button_visible",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ITabView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const TAB_VIEW_EVENTS: &[EventDescriptor] = &[
-    EventDescriptor {
-        id: EventId::TabViewSelectionChanged,
-        name: "SelectionChanged",
-        field: "on_selection_changed",
-        payload: "SelectionIndex",
-        interface: "Microsoft.UI.Xaml.Controls.ITabView",
-    },
-    EventDescriptor {
-        id: EventId::TabViewTabCloseRequested,
-        name: "TabCloseRequested",
-        field: "on_close_requested",
-        payload: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ITabView",
-    },
-    EventDescriptor {
-        id: EventId::TabViewAddTabButtonClick,
-        name: "AddTabButtonClick",
-        field: "on_add_tab_button_click",
-        payload: "Unit",
-        interface: "Microsoft.UI.Xaml.Controls.ITabView",
-    },
-    EventDescriptor {
-        id: EventId::TabViewTabItemsChanged,
-        name: "TabItemsChanged",
-        field: "on_reordered",
-        payload: "StrList",
-        interface: "Microsoft.UI.Xaml.Controls.ITabView",
-    },
-];
-const TAB_VIEW_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::TabViewTabItems,
-    name: "TabItems",
-    interface: "Microsoft.UI.Xaml.Controls.ITabView",
-    target: "inspectable",
-    collection: true,
-}];
-const TAB_VIEW_ITEM_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::TabViewItemHeader,
-        name: "Header",
-        field: "header",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ITabViewItem",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TabViewItemIsClosable,
-        name: "IsClosable",
-        field: "is_closable",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ITabViewItem",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TabViewItemTag,
-        name: "Tag",
-        field: "tag",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.IFrameworkElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const TAB_VIEW_ITEM_EVENTS: &[EventDescriptor] = &[];
-const TAB_VIEW_ITEM_SLOTS: &[SlotDescriptor] = &[];
-const TEACHING_TIP_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::TeachingTipTitle,
-        name: "Title",
-        field: "title",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ITeachingTip",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TeachingTipSubtitle,
-        name: "Subtitle",
-        field: "subtitle",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ITeachingTip",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TeachingTipIsOpen,
-        name: "IsOpen",
-        field: "is_open",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ITeachingTip",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TeachingTipIsLightDismissEnabled,
-        name: "IsLightDismissEnabled",
-        field: "is_light_dismiss_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ITeachingTip",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TeachingTipPreferredPlacement,
-        name: "PreferredPlacement",
-        field: "preferred_placement",
-        value: "TeachingTipPlacementMode",
-        interface: "Microsoft.UI.Xaml.Controls.ITeachingTip",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TeachingTipActionButtonContent,
-        name: "ActionButtonContent",
-        field: "action_button_content",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ITeachingTip",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TeachingTipCloseButtonContent,
-        name: "CloseButtonContent",
-        field: "close_button_content",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ITeachingTip",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const TEACHING_TIP_EVENTS: &[EventDescriptor] = &[
-    EventDescriptor {
-        id: EventId::TeachingTipClosed,
-        name: "Closed",
-        field: "on_closed",
-        payload: "Unit",
-        interface: "Microsoft.UI.Xaml.Controls.ITeachingTip",
-    },
-    EventDescriptor {
-        id: EventId::TeachingTipActionButtonClick,
-        name: "ActionButtonClick",
-        field: "on_action_button_click",
-        payload: "Unit",
-        interface: "Microsoft.UI.Xaml.Controls.ITeachingTip",
-    },
-];
-const TEACHING_TIP_SLOTS: &[SlotDescriptor] = &[];
-const DROP_DOWN_BUTTON_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::DropDownButtonIsEnabled,
-    name: "IsEnabled",
-    field: "is_enabled",
-    value: "Bool",
-    interface: "Microsoft.UI.Xaml.Controls.IControl",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const DROP_DOWN_BUTTON_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::DropDownButtonClick,
-    name: "Click",
-    field: "on_click",
-    payload: "Unit",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.IButtonBase",
-}];
-const DROP_DOWN_BUTTON_SLOTS: &[SlotDescriptor] = &[];
-const COMMAND_BAR_PROPERTIES: &[PropertyDescriptor] = &[];
-const COMMAND_BAR_EVENTS: &[EventDescriptor] = &[];
-const COMMAND_BAR_SLOTS: &[SlotDescriptor] = &[
-    SlotDescriptor {
-        id: SlotId::CommandBarPrimaryCommands,
-        name: "PrimaryCommands",
-        interface: "Microsoft.UI.Xaml.Controls.ICommandBar",
-        target: "inspectable",
-        collection: true,
-    },
-    SlotDescriptor {
-        id: SlotId::CommandBarSecondaryCommands,
-        name: "SecondaryCommands",
-        interface: "Microsoft.UI.Xaml.Controls.ICommandBar",
-        target: "inspectable",
-        collection: true,
-    },
-];
-const APP_BAR_BUTTON_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::AppBarButtonLabel,
-        name: "Label",
-        field: "label",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IAppBarButton",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::AppBarButtonIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const APP_BAR_BUTTON_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::AppBarButtonClick,
-    name: "Click",
-    field: "on_click",
-    payload: "Unit",
-    interface: "Microsoft.UI.Xaml.Controls.Primitives.IButtonBase",
-}];
-const APP_BAR_BUTTON_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::AppBarButtonIcon,
-    name: "Icon",
-    interface: "Microsoft.UI.Xaml.Controls.IAppBarButton",
-    target: "icon_element",
-    collection: false,
-}];
-const APP_BAR_SEPARATOR_PROPERTIES: &[PropertyDescriptor] = &[];
-const APP_BAR_SEPARATOR_EVENTS: &[EventDescriptor] = &[];
-const APP_BAR_SEPARATOR_SLOTS: &[SlotDescriptor] = &[];
-const MENU_BAR_PROPERTIES: &[PropertyDescriptor] = &[];
-const MENU_BAR_EVENTS: &[EventDescriptor] = &[];
-const MENU_BAR_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::MenuBarItems,
-    name: "Items",
-    interface: "Microsoft.UI.Xaml.Controls.IMenuBar",
-    target: "inspectable",
-    collection: true,
-}];
-const MENU_BAR_ITEM_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::MenuBarItemTitle,
-    name: "Title",
-    field: "title",
-    value: "Str",
-    interface: "Microsoft.UI.Xaml.Controls.IMenuBarItem",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const MENU_BAR_ITEM_EVENTS: &[EventDescriptor] = &[];
-const MENU_BAR_ITEM_SLOTS: &[SlotDescriptor] = &[];
-const SPLIT_BUTTON_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::SplitButtonIsEnabled,
-    name: "IsEnabled",
-    field: "is_enabled",
-    value: "Bool",
-    interface: "Microsoft.UI.Xaml.Controls.IControl",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const SPLIT_BUTTON_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::SplitButtonClick,
-    name: "Click",
-    field: "on_click",
-    payload: "Unit",
-    interface: "Microsoft.UI.Xaml.Controls.ISplitButton",
-}];
-const SPLIT_BUTTON_SLOTS: &[SlotDescriptor] = &[];
-const COLOR_PICKER_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ColorPickerColor,
-        name: "Color",
-        field: "color",
-        value: "Color",
-        interface: "Microsoft.UI.Xaml.Controls.IColorPicker",
-        clearable: true,
-        feedback: Some("ColorChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ColorPickerIsAlphaEnabled,
-        name: "IsAlphaEnabled",
-        field: "is_alpha_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IColorPicker",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ColorPickerIsHexInputVisible,
-        name: "IsHexInputVisible",
-        field: "is_hex_input_visible",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IColorPicker",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ColorPickerIsColorSliderVisible,
-        name: "IsColorSliderVisible",
-        field: "is_color_slider_visible",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IColorPicker",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ColorPickerIsColorChannelTextInputVisible,
-        name: "IsColorChannelTextInputVisible",
-        field: "is_color_channel_text_input_visible",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IColorPicker",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ColorPickerIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const COLOR_PICKER_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::ColorPickerColorChanged,
-    name: "ColorChanged",
-    field: "on_color_changed",
-    payload: "Color",
-    interface: "Microsoft.UI.Xaml.Controls.IColorPicker",
-}];
-const COLOR_PICKER_SLOTS: &[SlotDescriptor] = &[];
-const DATE_PICKER_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::DatePickerDayVisible,
-        name: "DayVisible",
-        field: "day_visible",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IDatePicker",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::DatePickerMonthVisible,
-        name: "MonthVisible",
-        field: "month_visible",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IDatePicker",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::DatePickerYearVisible,
-        name: "YearVisible",
-        field: "year_visible",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IDatePicker",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::DatePickerIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const DATE_PICKER_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::DatePickerSelectedDateChanged,
-    name: "SelectedDateChanged",
-    field: "on_selected_date_changed",
-    payload: "OptionalDateTime",
-    interface: "Microsoft.UI.Xaml.Controls.IDatePicker",
-}];
-const DATE_PICKER_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::DatePickerHeader,
-    name: "Header",
-    interface: "Microsoft.UI.Xaml.Controls.IDatePicker",
-    target: "inspectable",
-    collection: false,
-}];
-const TIME_PICKER_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::TimePickerClockIdentifier,
-        name: "ClockIdentifier",
-        field: "clock_identifier",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ITimePicker",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TimePickerMinuteIncrement,
-        name: "MinuteIncrement",
-        field: "minute_increment",
-        value: "I32",
-        interface: "Microsoft.UI.Xaml.Controls.ITimePicker",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::TimePickerIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const TIME_PICKER_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::TimePickerSelectedTimeChanged,
-    name: "SelectedTimeChanged",
-    field: "on_selected_time_changed",
-    payload: "OptionalTimeSpan",
-    interface: "Microsoft.UI.Xaml.Controls.ITimePicker",
-}];
-const TIME_PICKER_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::TimePickerHeader,
-    name: "Header",
-    interface: "Microsoft.UI.Xaml.Controls.ITimePicker",
-    target: "inspectable",
-    collection: false,
-}];
-const CALENDAR_DATE_PICKER_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::CalendarDatePickerPlaceholderText,
-        name: "PlaceholderText",
-        field: "placeholder_text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.ICalendarDatePicker",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::CalendarDatePickerIsTodayHighlighted,
-        name: "IsTodayHighlighted",
-        field: "is_today_highlighted",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ICalendarDatePicker",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::CalendarDatePickerIsCalendarOpen,
-        name: "IsCalendarOpen",
-        field: "is_calendar_open",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ICalendarDatePicker",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::CalendarDatePickerIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const CALENDAR_DATE_PICKER_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::CalendarDatePickerDateChanged,
-    name: "DateChanged",
-    field: "on_date_changed",
-    payload: "OptionalDateTime",
-    interface: "Microsoft.UI.Xaml.Controls.ICalendarDatePicker",
-}];
-const CALENDAR_DATE_PICKER_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::CalendarDatePickerHeader,
-    name: "Header",
-    interface: "Microsoft.UI.Xaml.Controls.ICalendarDatePicker",
-    target: "inspectable",
-    collection: false,
-}];
-const TOOL_TIP_PROPERTIES: &[PropertyDescriptor] = &[];
-const TOOL_TIP_EVENTS: &[EventDescriptor] = &[];
-const TOOL_TIP_SLOTS: &[SlotDescriptor] = &[];
-const CONTENT_DIALOG_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ContentDialogTitle,
-        name: "Title",
-        field: "title",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IContentDialog",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ContentDialogPrimaryButtonText,
-        name: "PrimaryButtonText",
-        field: "primary_button_text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IContentDialog",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ContentDialogSecondaryButtonText,
-        name: "SecondaryButtonText",
-        field: "secondary_button_text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IContentDialog",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ContentDialogCloseButtonText,
-        name: "CloseButtonText",
-        field: "close_button_text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IContentDialog",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ContentDialogIsPrimaryButtonEnabled,
-        name: "IsPrimaryButtonEnabled",
-        field: "is_primary_button_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IContentDialog",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ContentDialogIsSecondaryButtonEnabled,
-        name: "IsSecondaryButtonEnabled",
-        field: "is_secondary_button_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IContentDialog",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const CONTENT_DIALOG_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::ContentDialogClosed,
-    name: "Closed",
-    field: "on_closed",
-    payload: "ContentDialogResult",
-    interface: "Microsoft.UI.Xaml.Controls.IContentDialog",
-}];
-const CONTENT_DIALOG_SLOTS: &[SlotDescriptor] = &[];
-const CALENDAR_VIEW_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::CalendarViewIsTodayHighlighted,
-        name: "IsTodayHighlighted",
-        field: "is_today_highlighted",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ICalendarView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::CalendarViewIsGroupLabelVisible,
-        name: "IsGroupLabelVisible",
-        field: "is_group_label_visible",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.ICalendarView",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::CalendarViewIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const CALENDAR_VIEW_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::CalendarViewSelectedDatesChanged,
-    name: "SelectedDatesChanged",
-    field: "on_selected_dates_changed",
-    payload: "Unit",
-    interface: "Microsoft.UI.Xaml.Controls.ICalendarView",
-}];
-const CALENDAR_VIEW_SLOTS: &[SlotDescriptor] = &[];
-const LIST_VIEW_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::ListViewSelectedIndex,
-        name: "SelectedIndex",
-        field: "selected_index",
-        value: "SelectionIndex",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.ISelector",
-        clearable: true,
-        feedback: Some("SelectionChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ListViewSelectionMode,
-        name: "SelectionMode",
-        field: "selection_mode",
-        value: "ListViewSelectionMode",
-        interface: "Microsoft.UI.Xaml.Controls.IListViewBase",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ListViewCanDragItems,
-        name: "CanDragItems",
-        field: "can_drag_items",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IListViewBase",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ListViewCanReorderItems,
-        name: "CanReorderItems",
-        field: "can_reorder_items",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IListViewBase",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::ListViewAllowDrop,
-        name: "AllowDrop",
-        field: "allow_drop",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const LIST_VIEW_EVENTS: &[EventDescriptor] = &[
-    EventDescriptor {
-        id: EventId::ListViewSelectionChanged,
-        name: "SelectionChanged",
-        field: "on_selection_changed",
-        payload: "SelectionIndex",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.ISelector",
-    },
-    EventDescriptor {
-        id: EventId::ListViewDragItemsCompleted,
-        name: "DragItemsCompleted",
-        field: "on_reordered",
-        payload: "StrList",
-        interface: "Microsoft.UI.Xaml.Controls.IListViewBase",
-    },
-];
-const LIST_VIEW_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::ListViewItems,
-    name: "Items",
-    interface: "Microsoft.UI.Xaml.Controls.IItemsControl",
-    target: "inspectable",
-    collection: true,
-}];
-const LIST_VIEW_ITEM_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::ListViewItemTag,
-    name: "Tag",
-    field: "tag",
-    value: "Str",
-    interface: "Microsoft.UI.Xaml.IFrameworkElement",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const LIST_VIEW_ITEM_EVENTS: &[EventDescriptor] = &[];
-const LIST_VIEW_ITEM_SLOTS: &[SlotDescriptor] = &[];
-const TREE_VIEW_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::TreeViewSelectionMode,
-    name: "SelectionMode",
-    field: "selection_mode",
-    value: "TreeViewSelectionMode",
-    interface: "Microsoft.UI.Xaml.Controls.ITreeView",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const TREE_VIEW_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::TreeViewItemInvoked,
-    name: "ItemInvoked",
-    field: "on_item_invoked",
-    payload: "Str",
-    interface: "Microsoft.UI.Xaml.Controls.ITreeView",
-}];
-const TREE_VIEW_SLOTS: &[SlotDescriptor] = &[];
-const GRID_VIEW_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::GridViewSelectedIndex,
-        name: "SelectedIndex",
-        field: "selected_index",
-        value: "SelectionIndex",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.ISelector",
-        clearable: true,
-        feedback: Some("SelectionChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::GridViewCanDragItems,
-        name: "CanDragItems",
-        field: "can_drag_items",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IListViewBase",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::GridViewCanReorderItems,
-        name: "CanReorderItems",
-        field: "can_reorder_items",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IListViewBase",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::GridViewAllowDrop,
-        name: "AllowDrop",
-        field: "allow_drop",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.IUIElement",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const GRID_VIEW_EVENTS: &[EventDescriptor] = &[
-    EventDescriptor {
-        id: EventId::GridViewDragItemsCompleted,
-        name: "DragItemsCompleted",
-        field: "on_reordered",
-        payload: "StrList",
-        interface: "Microsoft.UI.Xaml.Controls.IListViewBase",
-    },
-    EventDescriptor {
-        id: EventId::GridViewSelectionChanged,
-        name: "SelectionChanged",
-        field: "on_selection_changed",
-        payload: "SelectionIndex",
-        interface: "Microsoft.UI.Xaml.Controls.Primitives.ISelector",
-    },
-];
-const GRID_VIEW_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::GridViewItems,
-    name: "Items",
-    interface: "Microsoft.UI.Xaml.Controls.IItemsControl",
-    target: "inspectable",
-    collection: true,
-}];
-const GRID_VIEW_ITEM_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::GridViewItemTag,
-    name: "Tag",
-    field: "tag",
-    value: "Str",
-    interface: "Microsoft.UI.Xaml.IFrameworkElement",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const GRID_VIEW_ITEM_EVENTS: &[EventDescriptor] = &[];
-const GRID_VIEW_ITEM_SLOTS: &[SlotDescriptor] = &[];
-const RELATIVE_PANEL_PROPERTIES: &[PropertyDescriptor] = &[];
-const RELATIVE_PANEL_EVENTS: &[EventDescriptor] = &[];
-const RELATIVE_PANEL_SLOTS: &[SlotDescriptor] = &[];
-const CANVAS_PROPERTIES: &[PropertyDescriptor] = &[];
-const CANVAS_EVENTS: &[EventDescriptor] = &[];
-const CANVAS_SLOTS: &[SlotDescriptor] = &[];
-const RICH_EDIT_BOX_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::RichEditBoxDocument,
-        name: "Document",
-        field: "text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IRichEditBox",
-        clearable: true,
-        feedback: Some("TextChanged"),
-        feedback_contract: Some("synchronous_exact"),
-        observes_feedback: true,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RichEditBoxPlaceholderText,
-        name: "PlaceholderText",
-        field: "placeholder_text",
-        value: "Str",
-        interface: "Microsoft.UI.Xaml.Controls.IRichEditBox",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RichEditBoxIsReadOnly,
-        name: "IsReadOnly",
-        field: "is_read_only",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IRichEditBox",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RichEditBoxIsEnabled,
-        name: "IsEnabled",
-        field: "is_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IControl",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const RICH_EDIT_BOX_EVENTS: &[EventDescriptor] = &[EventDescriptor {
-    id: EventId::RichEditBoxTextChanged,
-    name: "TextChanged",
-    field: "on_text_changed",
-    payload: "Str",
-    interface: "Microsoft.UI.Xaml.Controls.IRichEditBox",
-}];
-const RICH_EDIT_BOX_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::RichEditBoxHeader,
-    name: "Header",
-    interface: "Microsoft.UI.Xaml.Controls.IRichEditBox",
-    target: "inspectable",
-    collection: false,
-}];
-const RICH_TEXT_BLOCK_PROPERTIES: &[PropertyDescriptor] = &[
-    PropertyDescriptor {
-        id: PropertyId::RichTextBlockBlocks,
-        name: "Blocks",
-        field: "paragraphs",
-        value: "RichText",
-        interface: "Microsoft.UI.Xaml.Controls.IRichTextBlock",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RichTextBlockFontSize,
-        name: "FontSize",
-        field: "font_size",
-        value: "F64",
-        interface: "Microsoft.UI.Xaml.Controls.IRichTextBlock",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RichTextBlockIsTextSelectionEnabled,
-        name: "IsTextSelectionEnabled",
-        field: "is_text_selection_enabled",
-        value: "Bool",
-        interface: "Microsoft.UI.Xaml.Controls.IRichTextBlock",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-    PropertyDescriptor {
-        id: PropertyId::RichTextBlockTextWrapping,
-        name: "TextWrapping",
-        field: "text_wrapping",
-        value: "TextWrapping",
-        interface: "Microsoft.UI.Xaml.Controls.IRichTextBlock",
-        clearable: true,
-        feedback: None,
-        feedback_contract: None,
-        observes_feedback: false,
-    },
-];
-const RICH_TEXT_BLOCK_EVENTS: &[EventDescriptor] = &[];
-const RICH_TEXT_BLOCK_SLOTS: &[SlotDescriptor] = &[];
-const VIEWBOX_PROPERTIES: &[PropertyDescriptor] = &[PropertyDescriptor {
-    id: PropertyId::ViewboxStretch,
-    name: "Stretch",
-    field: "stretch",
-    value: "Stretch",
-    interface: "Microsoft.UI.Xaml.Controls.IViewbox",
-    clearable: true,
-    feedback: None,
-    feedback_contract: None,
-    observes_feedback: false,
-}];
-const VIEWBOX_EVENTS: &[EventDescriptor] = &[];
-const VIEWBOX_SLOTS: &[SlotDescriptor] = &[SlotDescriptor {
-    id: SlotId::ViewboxChild,
-    name: "Child",
-    interface: "Microsoft.UI.Xaml.Controls.IViewbox",
-    target: "ui_element",
-    collection: false,
-}];
-const WEB_VIEW2_PROPERTIES: &[PropertyDescriptor] = &[];
-const WEB_VIEW2_EVENTS: &[EventDescriptor] = &[];
-const WEB_VIEW2_SLOTS: &[SlotDescriptor] = &[];
-const SWAP_CHAIN_PANEL_PROPERTIES: &[PropertyDescriptor] = &[];
-const SWAP_CHAIN_PANEL_EVENTS: &[EventDescriptor] = &[];
-const SWAP_CHAIN_PANEL_SLOTS: &[SlotDescriptor] = &[];
-pub const CONTROLS: &[ControlDescriptor] = &[
-    ControlDescriptor {
-        kind: MountedKind::TextBlock,
-        name: "TextBlock",
-        type_name: "Microsoft.UI.Xaml.Controls.TextBlock",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout, Capability::TextStyle],
-        properties: TEXT_BLOCK_PROPERTIES,
-        events: TEXT_BLOCK_EVENTS,
-        slots: TEXT_BLOCK_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::Button,
-        name: "Button",
-        type_name: "Microsoft.UI.Xaml.Controls.Button",
-        role: ControlRole::Content,
-        capabilities: &[
-            Capability::Layout,
-            Capability::Enabled,
-            Capability::Content,
-            Capability::Focus,
-        ],
-        properties: BUTTON_PROPERTIES,
-        events: BUTTON_EVENTS,
-        slots: BUTTON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::HyperlinkButton,
-        name: "HyperlinkButton",
-        type_name: "Microsoft.UI.Xaml.Controls.HyperlinkButton",
-        role: ControlRole::Content,
-        capabilities: &[
-            Capability::Layout,
-            Capability::Enabled,
-            Capability::Content,
-            Capability::Focus,
-        ],
-        properties: HYPERLINK_BUTTON_PROPERTIES,
-        events: HYPERLINK_BUTTON_EVENTS,
-        slots: HYPERLINK_BUTTON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::RepeatButton,
-        name: "RepeatButton",
-        type_name: "Microsoft.UI.Xaml.Controls.Primitives.RepeatButton",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Layout, Capability::Enabled, Capability::Content],
-        properties: REPEAT_BUTTON_PROPERTIES,
-        events: REPEAT_BUTTON_EVENTS,
-        slots: REPEAT_BUTTON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::Border,
-        name: "Border",
-        type_name: "Microsoft.UI.Xaml.Controls.Border",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Layout, Capability::Content],
-        properties: BORDER_PROPERTIES,
-        events: BORDER_EVENTS,
-        slots: BORDER_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::BreadcrumbBar,
-        name: "BreadcrumbBar",
-        type_name: "Microsoft.UI.Xaml.Controls.BreadcrumbBar",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: BREADCRUMB_BAR_PROPERTIES,
-        events: BREADCRUMB_BAR_EVENTS,
-        slots: BREADCRUMB_BAR_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::StackPanel,
-        name: "StackPanel",
-        type_name: "Microsoft.UI.Xaml.Controls.StackPanel",
-        role: ControlRole::Children,
-        capabilities: &[Capability::Layout, Capability::Children],
-        properties: STACK_PANEL_PROPERTIES,
-        events: STACK_PANEL_EVENTS,
-        slots: STACK_PANEL_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::VariableSizedWrapGrid,
-        name: "VariableSizedWrapGrid",
-        type_name: "Microsoft.UI.Xaml.Controls.VariableSizedWrapGrid",
-        role: ControlRole::Children,
-        capabilities: &[Capability::Layout, Capability::Children],
-        properties: VARIABLE_SIZED_WRAP_GRID_PROPERTIES,
-        events: VARIABLE_SIZED_WRAP_GRID_EVENTS,
-        slots: VARIABLE_SIZED_WRAP_GRID_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::Grid,
-        name: "Grid",
-        type_name: "Microsoft.UI.Xaml.Controls.Grid",
-        role: ControlRole::Children,
-        capabilities: &[
-            Capability::Layout,
-            Capability::Children,
-            Capability::GridDefinitions,
-            Capability::Reference,
-        ],
-        properties: GRID_PROPERTIES,
-        events: GRID_EVENTS,
-        slots: GRID_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::TextBox,
-        name: "TextBox",
-        type_name: "Microsoft.UI.Xaml.Controls.TextBox",
-        role: ControlRole::Slots,
-        capabilities: &[
-            Capability::Layout,
-            Capability::Enabled,
-            Capability::TextStyle,
-            Capability::ControlledText,
-            Capability::Focus,
-        ],
-        properties: TEXT_BOX_PROPERTIES,
-        events: TEXT_BOX_EVENTS,
-        slots: TEXT_BOX_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::AutoSuggestBox,
-        name: "AutoSuggestBox",
-        type_name: "Microsoft.UI.Xaml.Controls.AutoSuggestBox",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled, Capability::Focus],
-        properties: AUTO_SUGGEST_BOX_PROPERTIES,
-        events: AUTO_SUGGEST_BOX_EVENTS,
-        slots: AUTO_SUGGEST_BOX_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::PasswordBox,
-        name: "PasswordBox",
-        type_name: "Microsoft.UI.Xaml.Controls.PasswordBox",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled, Capability::Focus],
-        properties: PASSWORD_BOX_PROPERTIES,
-        events: PASSWORD_BOX_EVENTS,
-        slots: PASSWORD_BOX_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::NumberBox,
-        name: "NumberBox",
-        type_name: "Microsoft.UI.Xaml.Controls.NumberBox",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled, Capability::Focus],
-        properties: NUMBER_BOX_PROPERTIES,
-        events: NUMBER_BOX_EVENTS,
-        slots: NUMBER_BOX_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::Slider,
-        name: "Slider",
-        type_name: "Microsoft.UI.Xaml.Controls.Slider",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled, Capability::Focus],
-        properties: SLIDER_PROPERTIES,
-        events: SLIDER_EVENTS,
-        slots: SLIDER_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::TitleBar,
-        name: "TitleBar",
-        type_name: "Microsoft.UI.Xaml.Controls.TitleBar",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::WindowTitleBar],
-        properties: TITLE_BAR_PROPERTIES,
-        events: TITLE_BAR_EVENTS,
-        slots: TITLE_BAR_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::NavigationView,
-        name: "NavigationView",
-        type_name: "Microsoft.UI.Xaml.Controls.NavigationView",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: NAVIGATION_VIEW_PROPERTIES,
-        events: NAVIGATION_VIEW_EVENTS,
-        slots: NAVIGATION_VIEW_SLOTS,
-        selection: Some(SelectionDescriptor {
-            slot: SlotId::NavigationViewMenuItems,
-            item: MountedKind::NavigationViewItem,
-            selected_property: PropertyId::NavigationViewItemIsSelected,
-            event: EventId::NavigationViewSelectionChanged,
-            payload_property: PropertyId::NavigationViewItemTag,
-        }),
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::NavigationViewItem,
-        name: "NavigationViewItem",
-        type_name: "Microsoft.UI.Xaml.Controls.NavigationViewItem",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout],
-        properties: NAVIGATION_VIEW_ITEM_PROPERTIES,
-        events: NAVIGATION_VIEW_ITEM_EVENTS,
-        slots: NAVIGATION_VIEW_ITEM_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::SplitView,
-        name: "SplitView",
-        type_name: "Microsoft.UI.Xaml.Controls.SplitView",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout],
-        properties: SPLIT_VIEW_PROPERTIES,
-        events: SPLIT_VIEW_EVENTS,
-        slots: SPLIT_VIEW_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ProgressBar,
-        name: "ProgressBar",
-        type_name: "Microsoft.UI.Xaml.Controls.ProgressBar",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: PROGRESS_BAR_PROPERTIES,
-        events: PROGRESS_BAR_EVENTS,
-        slots: PROGRESS_BAR_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ToggleSwitch,
-        name: "ToggleSwitch",
-        type_name: "Microsoft.UI.Xaml.Controls.ToggleSwitch",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled, Capability::Focus],
-        properties: TOGGLE_SWITCH_PROPERTIES,
-        events: TOGGLE_SWITCH_EVENTS,
-        slots: TOGGLE_SWITCH_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::CheckBox,
-        name: "CheckBox",
-        type_name: "Microsoft.UI.Xaml.Controls.CheckBox",
-        role: ControlRole::Content,
-        capabilities: &[
-            Capability::Layout,
-            Capability::Enabled,
-            Capability::Content,
-            Capability::Focus,
-        ],
-        properties: CHECK_BOX_PROPERTIES,
-        events: CHECK_BOX_EVENTS,
-        slots: CHECK_BOX_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ToggleButton,
-        name: "ToggleButton",
-        type_name: "Microsoft.UI.Xaml.Controls.Primitives.ToggleButton",
-        role: ControlRole::Content,
-        capabilities: &[
-            Capability::Layout,
-            Capability::Enabled,
-            Capability::Content,
-            Capability::Focus,
-        ],
-        properties: TOGGLE_BUTTON_PROPERTIES,
-        events: TOGGLE_BUTTON_EVENTS,
-        slots: TOGGLE_BUTTON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::RadioButton,
-        name: "RadioButton",
-        type_name: "Microsoft.UI.Xaml.Controls.RadioButton",
-        role: ControlRole::Content,
-        capabilities: &[
-            Capability::Layout,
-            Capability::Enabled,
-            Capability::Content,
-            Capability::Focus,
-        ],
-        properties: RADIO_BUTTON_PROPERTIES,
-        events: RADIO_BUTTON_EVENTS,
-        slots: RADIO_BUTTON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::RadioButtons,
-        name: "RadioButtons",
-        type_name: "Microsoft.UI.Xaml.Controls.RadioButtons",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout],
-        properties: RADIO_BUTTONS_PROPERTIES,
-        events: RADIO_BUTTONS_EVENTS,
-        slots: RADIO_BUTTONS_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ItemsRepeater,
-        name: "ItemsRepeater",
-        type_name: "Microsoft.UI.Xaml.Controls.ItemsRepeater",
-        role: ControlRole::Virtual,
-        capabilities: &[Capability::Layout, Capability::Items],
-        properties: ITEMS_REPEATER_PROPERTIES,
-        events: ITEMS_REPEATER_EVENTS,
-        slots: ITEMS_REPEATER_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::InfoBadge,
-        name: "InfoBadge",
-        type_name: "Microsoft.UI.Xaml.Controls.InfoBadge",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: INFO_BADGE_PROPERTIES,
-        events: INFO_BADGE_EVENTS,
-        slots: INFO_BADGE_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::InfoBar,
-        name: "InfoBar",
-        type_name: "Microsoft.UI.Xaml.Controls.InfoBar",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: INFO_BAR_PROPERTIES,
-        events: INFO_BAR_EVENTS,
-        slots: INFO_BAR_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::PersonPicture,
-        name: "PersonPicture",
-        type_name: "Microsoft.UI.Xaml.Controls.PersonPicture",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: PERSON_PICTURE_PROPERTIES,
-        events: PERSON_PICTURE_EVENTS,
-        slots: PERSON_PICTURE_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ScrollViewer,
-        name: "ScrollViewer",
-        type_name: "Microsoft.UI.Xaml.Controls.ScrollViewer",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Layout, Capability::Content],
-        properties: SCROLL_VIEWER_PROPERTIES,
-        events: SCROLL_VIEWER_EVENTS,
-        slots: SCROLL_VIEWER_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ScrollView,
-        name: "ScrollView",
-        type_name: "Microsoft.UI.Xaml.Controls.ScrollView",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Layout, Capability::Content],
-        properties: SCROLL_VIEW_PROPERTIES,
-        events: SCROLL_VIEW_EVENTS,
-        slots: SCROLL_VIEW_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::Image,
-        name: "Image",
-        type_name: "Microsoft.UI.Xaml.Controls.Image",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout, Capability::Reference],
-        properties: IMAGE_PROPERTIES,
-        events: IMAGE_EVENTS,
-        slots: IMAGE_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ProgressRing,
-        name: "ProgressRing",
-        type_name: "Microsoft.UI.Xaml.Controls.ProgressRing",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: PROGRESS_RING_PROPERTIES,
-        events: PROGRESS_RING_EVENTS,
-        slots: PROGRESS_RING_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ListBox,
-        name: "ListBox",
-        type_name: "Microsoft.UI.Xaml.Controls.ListBox",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: LIST_BOX_PROPERTIES,
-        events: LIST_BOX_EVENTS,
-        slots: LIST_BOX_SLOTS,
-        selection: Some(SelectionDescriptor {
-            slot: SlotId::ListBoxItems,
-            item: MountedKind::ListBoxItem,
-            selected_property: PropertyId::ListBoxItemIsSelected,
-            event: EventId::ListBoxSelectionChanged,
-            payload_property: PropertyId::ListBoxItemTag,
-        }),
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::Rectangle,
-        name: "Rectangle",
-        type_name: "Microsoft.UI.Xaml.Shapes.Rectangle",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: RECTANGLE_PROPERTIES,
-        events: RECTANGLE_EVENTS,
-        slots: RECTANGLE_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::Ellipse,
-        name: "Ellipse",
-        type_name: "Microsoft.UI.Xaml.Shapes.Ellipse",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: ELLIPSE_PROPERTIES,
-        events: ELLIPSE_EVENTS,
-        slots: ELLIPSE_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::Line,
-        name: "Line",
-        type_name: "Microsoft.UI.Xaml.Shapes.Line",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: LINE_PROPERTIES,
-        events: LINE_EVENTS,
-        slots: LINE_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::SymbolIcon,
-        name: "SymbolIcon",
-        type_name: "Microsoft.UI.Xaml.Controls.SymbolIcon",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: SYMBOL_ICON_PROPERTIES,
-        events: SYMBOL_ICON_EVENTS,
-        slots: SYMBOL_ICON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ImageIcon,
-        name: "ImageIcon",
-        type_name: "Microsoft.UI.Xaml.Controls.ImageIcon",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: IMAGE_ICON_PROPERTIES,
-        events: IMAGE_ICON_EVENTS,
-        slots: IMAGE_ICON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::FontIcon,
-        name: "FontIcon",
-        type_name: "Microsoft.UI.Xaml.Controls.FontIcon",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: FONT_ICON_PROPERTIES,
-        events: FONT_ICON_EVENTS,
-        slots: FONT_ICON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::BitmapIcon,
-        name: "BitmapIcon",
-        type_name: "Microsoft.UI.Xaml.Controls.BitmapIcon",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: BITMAP_ICON_PROPERTIES,
-        events: BITMAP_ICON_EVENTS,
-        slots: BITMAP_ICON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::PathIcon,
-        name: "PathIcon",
-        type_name: "Microsoft.UI.Xaml.Controls.PathIcon",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: PATH_ICON_PROPERTIES,
-        events: PATH_ICON_EVENTS,
-        slots: PATH_ICON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ListBoxItem,
-        name: "ListBoxItem",
-        type_name: "Microsoft.UI.Xaml.Controls.ListBoxItem",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Layout, Capability::Content],
-        properties: LIST_BOX_ITEM_PROPERTIES,
-        events: LIST_BOX_ITEM_EVENTS,
-        slots: LIST_BOX_ITEM_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::RatingControl,
-        name: "RatingControl",
-        type_name: "Microsoft.UI.Xaml.Controls.RatingControl",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout, Capability::Focus],
-        properties: RATING_CONTROL_PROPERTIES,
-        events: RATING_CONTROL_EVENTS,
-        slots: RATING_CONTROL_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::Expander,
-        name: "Expander",
-        type_name: "Microsoft.UI.Xaml.Controls.Expander",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout],
-        properties: EXPANDER_PROPERTIES,
-        events: EXPANDER_EVENTS,
-        slots: EXPANDER_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ComboBox,
-        name: "ComboBox",
-        type_name: "Microsoft.UI.Xaml.Controls.ComboBox",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled, Capability::Focus],
-        properties: COMBO_BOX_PROPERTIES,
-        events: COMBO_BOX_EVENTS,
-        slots: COMBO_BOX_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::Pivot,
-        name: "Pivot",
-        type_name: "Microsoft.UI.Xaml.Controls.Pivot",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout],
-        properties: PIVOT_PROPERTIES,
-        events: PIVOT_EVENTS,
-        slots: PIVOT_SLOTS,
-        selection: None,
-        controlled_collection: Some(ControlledCollectionDescriptor {
-            slot: SlotId::PivotItems,
-            property: PropertyId::PivotSelectedIndex,
-            event: EventId::PivotSelectionChanged,
-        }),
-    },
-    ControlDescriptor {
-        kind: MountedKind::PivotItem,
-        name: "PivotItem",
-        type_name: "Microsoft.UI.Xaml.Controls.PivotItem",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Layout, Capability::Content],
-        properties: PIVOT_ITEM_PROPERTIES,
-        events: PIVOT_ITEM_EVENTS,
-        slots: PIVOT_ITEM_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::FlipView,
-        name: "FlipView",
-        type_name: "Microsoft.UI.Xaml.Controls.FlipView",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout],
-        properties: FLIP_VIEW_PROPERTIES,
-        events: FLIP_VIEW_EVENTS,
-        slots: FLIP_VIEW_SLOTS,
-        selection: None,
-        controlled_collection: Some(ControlledCollectionDescriptor {
-            slot: SlotId::FlipViewItems,
-            property: PropertyId::FlipViewSelectedIndex,
-            event: EventId::FlipViewSelectionChanged,
-        }),
-    },
-    ControlDescriptor {
-        kind: MountedKind::SelectorBar,
-        name: "SelectorBar",
-        type_name: "Microsoft.UI.Xaml.Controls.SelectorBar",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout],
-        properties: SELECTOR_BAR_PROPERTIES,
-        events: SELECTOR_BAR_EVENTS,
-        slots: SELECTOR_BAR_SLOTS,
-        selection: Some(SelectionDescriptor {
-            slot: SlotId::SelectorBarItems,
-            item: MountedKind::SelectorBarItem,
-            selected_property: PropertyId::SelectorBarItemIsSelected,
-            event: EventId::SelectorBarSelectionChanged,
-            payload_property: PropertyId::SelectorBarItemText,
-        }),
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::SelectorBarItem,
-        name: "SelectorBarItem",
-        type_name: "Microsoft.UI.Xaml.Controls.SelectorBarItem",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout],
-        properties: SELECTOR_BAR_ITEM_PROPERTIES,
-        events: SELECTOR_BAR_ITEM_EVENTS,
-        slots: SELECTOR_BAR_ITEM_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::TabView,
-        name: "TabView",
-        type_name: "Microsoft.UI.Xaml.Controls.TabView",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout],
-        properties: TAB_VIEW_PROPERTIES,
-        events: TAB_VIEW_EVENTS,
-        slots: TAB_VIEW_SLOTS,
-        selection: None,
-        controlled_collection: Some(ControlledCollectionDescriptor {
-            slot: SlotId::TabViewTabItems,
-            property: PropertyId::TabViewSelectedIndex,
-            event: EventId::TabViewSelectionChanged,
-        }),
-    },
-    ControlDescriptor {
-        kind: MountedKind::TabViewItem,
-        name: "TabViewItem",
-        type_name: "Microsoft.UI.Xaml.Controls.TabViewItem",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Layout, Capability::Content],
-        properties: TAB_VIEW_ITEM_PROPERTIES,
-        events: TAB_VIEW_ITEM_EVENTS,
-        slots: TAB_VIEW_ITEM_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::TeachingTip,
-        name: "TeachingTip",
-        type_name: "Microsoft.UI.Xaml.Controls.TeachingTip",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: TEACHING_TIP_PROPERTIES,
-        events: TEACHING_TIP_EVENTS,
-        slots: TEACHING_TIP_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::DropDownButton,
-        name: "DropDownButton",
-        type_name: "Microsoft.UI.Xaml.Controls.DropDownButton",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Layout, Capability::Content, Capability::Enabled],
-        properties: DROP_DOWN_BUTTON_PROPERTIES,
-        events: DROP_DOWN_BUTTON_EVENTS,
-        slots: DROP_DOWN_BUTTON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::CommandBar,
-        name: "CommandBar",
-        type_name: "Microsoft.UI.Xaml.Controls.CommandBar",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout],
-        properties: COMMAND_BAR_PROPERTIES,
-        events: COMMAND_BAR_EVENTS,
-        slots: COMMAND_BAR_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::AppBarButton,
-        name: "AppBarButton",
-        type_name: "Microsoft.UI.Xaml.Controls.AppBarButton",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: APP_BAR_BUTTON_PROPERTIES,
-        events: APP_BAR_BUTTON_EVENTS,
-        slots: APP_BAR_BUTTON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::AppBarSeparator,
-        name: "AppBarSeparator",
-        type_name: "Microsoft.UI.Xaml.Controls.AppBarSeparator",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: APP_BAR_SEPARATOR_PROPERTIES,
-        events: APP_BAR_SEPARATOR_EVENTS,
-        slots: APP_BAR_SEPARATOR_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::MenuBar,
-        name: "MenuBar",
-        type_name: "Microsoft.UI.Xaml.Controls.MenuBar",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout],
-        properties: MENU_BAR_PROPERTIES,
-        events: MENU_BAR_EVENTS,
-        slots: MENU_BAR_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::MenuBarItem,
-        name: "MenuBarItem",
-        type_name: "Microsoft.UI.Xaml.Controls.MenuBarItem",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout],
-        properties: MENU_BAR_ITEM_PROPERTIES,
-        events: MENU_BAR_ITEM_EVENTS,
-        slots: MENU_BAR_ITEM_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::SplitButton,
-        name: "SplitButton",
-        type_name: "Microsoft.UI.Xaml.Controls.SplitButton",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Layout, Capability::Content, Capability::Enabled],
-        properties: SPLIT_BUTTON_PROPERTIES,
-        events: SPLIT_BUTTON_EVENTS,
-        slots: SPLIT_BUTTON_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ColorPicker,
-        name: "ColorPicker",
-        type_name: "Microsoft.UI.Xaml.Controls.ColorPicker",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: COLOR_PICKER_PROPERTIES,
-        events: COLOR_PICKER_EVENTS,
-        slots: COLOR_PICKER_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::DatePicker,
-        name: "DatePicker",
-        type_name: "Microsoft.UI.Xaml.Controls.DatePicker",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: DATE_PICKER_PROPERTIES,
-        events: DATE_PICKER_EVENTS,
-        slots: DATE_PICKER_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::TimePicker,
-        name: "TimePicker",
-        type_name: "Microsoft.UI.Xaml.Controls.TimePicker",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: TIME_PICKER_PROPERTIES,
-        events: TIME_PICKER_EVENTS,
-        slots: TIME_PICKER_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::CalendarDatePicker,
-        name: "CalendarDatePicker",
-        type_name: "Microsoft.UI.Xaml.Controls.CalendarDatePicker",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: CALENDAR_DATE_PICKER_PROPERTIES,
-        events: CALENDAR_DATE_PICKER_EVENTS,
-        slots: CALENDAR_DATE_PICKER_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ToolTip,
-        name: "ToolTip",
-        type_name: "Microsoft.UI.Xaml.Controls.ToolTip",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Content],
-        properties: TOOL_TIP_PROPERTIES,
-        events: TOOL_TIP_EVENTS,
-        slots: TOOL_TIP_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ContentDialog,
-        name: "ContentDialog",
-        type_name: "Microsoft.UI.Xaml.Controls.ContentDialog",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Content],
-        properties: CONTENT_DIALOG_PROPERTIES,
-        events: CONTENT_DIALOG_EVENTS,
-        slots: CONTENT_DIALOG_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::CalendarView,
-        name: "CalendarView",
-        type_name: "Microsoft.UI.Xaml.Controls.CalendarView",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: CALENDAR_VIEW_PROPERTIES,
-        events: CALENDAR_VIEW_EVENTS,
-        slots: CALENDAR_VIEW_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::ListView,
-        name: "ListView",
-        type_name: "Microsoft.UI.Xaml.Controls.ListView",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: LIST_VIEW_PROPERTIES,
-        events: LIST_VIEW_EVENTS,
-        slots: LIST_VIEW_SLOTS,
-        selection: None,
-        controlled_collection: Some(ControlledCollectionDescriptor {
-            slot: SlotId::ListViewItems,
-            property: PropertyId::ListViewSelectedIndex,
-            event: EventId::ListViewSelectionChanged,
-        }),
-    },
-    ControlDescriptor {
-        kind: MountedKind::ListViewItem,
-        name: "ListViewItem",
-        type_name: "Microsoft.UI.Xaml.Controls.ListViewItem",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Layout, Capability::Content, Capability::Enabled],
-        properties: LIST_VIEW_ITEM_PROPERTIES,
-        events: LIST_VIEW_ITEM_EVENTS,
-        slots: LIST_VIEW_ITEM_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::TreeView,
-        name: "TreeView",
-        type_name: "Microsoft.UI.Xaml.Controls.TreeView",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: TREE_VIEW_PROPERTIES,
-        events: TREE_VIEW_EVENTS,
-        slots: TREE_VIEW_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::GridView,
-        name: "GridView",
-        type_name: "Microsoft.UI.Xaml.Controls.GridView",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout, Capability::Enabled],
-        properties: GRID_VIEW_PROPERTIES,
-        events: GRID_VIEW_EVENTS,
-        slots: GRID_VIEW_SLOTS,
-        selection: None,
-        controlled_collection: Some(ControlledCollectionDescriptor {
-            slot: SlotId::GridViewItems,
-            property: PropertyId::GridViewSelectedIndex,
-            event: EventId::GridViewSelectionChanged,
-        }),
-    },
-    ControlDescriptor {
-        kind: MountedKind::GridViewItem,
-        name: "GridViewItem",
-        type_name: "Microsoft.UI.Xaml.Controls.GridViewItem",
-        role: ControlRole::Content,
-        capabilities: &[Capability::Layout, Capability::Content, Capability::Enabled],
-        properties: GRID_VIEW_ITEM_PROPERTIES,
-        events: GRID_VIEW_ITEM_EVENTS,
-        slots: GRID_VIEW_ITEM_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::RelativePanel,
-        name: "RelativePanel",
-        type_name: "Microsoft.UI.Xaml.Controls.RelativePanel",
-        role: ControlRole::Children,
-        capabilities: &[Capability::Layout, Capability::Children],
-        properties: RELATIVE_PANEL_PROPERTIES,
-        events: RELATIVE_PANEL_EVENTS,
-        slots: RELATIVE_PANEL_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::Canvas,
-        name: "Canvas",
-        type_name: "Microsoft.UI.Xaml.Controls.Canvas",
-        role: ControlRole::Children,
-        capabilities: &[Capability::Layout, Capability::Children],
-        properties: CANVAS_PROPERTIES,
-        events: CANVAS_EVENTS,
-        slots: CANVAS_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::RichEditBox,
-        name: "RichEditBox",
-        type_name: "Microsoft.UI.Xaml.Controls.RichEditBox",
-        role: ControlRole::Slots,
-        capabilities: &[
-            Capability::Layout,
-            Capability::Enabled,
-            Capability::ControlledText,
-            Capability::Focus,
-        ],
-        properties: RICH_EDIT_BOX_PROPERTIES,
-        events: RICH_EDIT_BOX_EVENTS,
-        slots: RICH_EDIT_BOX_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::RichTextBlock,
-        name: "RichTextBlock",
-        type_name: "Microsoft.UI.Xaml.Controls.RichTextBlock",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout, Capability::TextStyle],
-        properties: RICH_TEXT_BLOCK_PROPERTIES,
-        events: RICH_TEXT_BLOCK_EVENTS,
-        slots: RICH_TEXT_BLOCK_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::Viewbox,
-        name: "Viewbox",
-        type_name: "Microsoft.UI.Xaml.Controls.Viewbox",
-        role: ControlRole::Slots,
-        capabilities: &[Capability::Layout],
-        properties: VIEWBOX_PROPERTIES,
-        events: VIEWBOX_EVENTS,
-        slots: VIEWBOX_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::WebView2,
-        name: "WebView2",
-        type_name: "Microsoft.UI.Xaml.Controls.WebView2",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout, Capability::Reference],
-        properties: WEB_VIEW2_PROPERTIES,
-        events: WEB_VIEW2_EVENTS,
-        slots: WEB_VIEW2_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-    ControlDescriptor {
-        kind: MountedKind::SwapChainPanel,
-        name: "SwapChainPanel",
-        type_name: "Microsoft.UI.Xaml.Controls.SwapChainPanel",
-        role: ControlRole::Leaf,
-        capabilities: &[Capability::Layout, Capability::Reference],
-        properties: SWAP_CHAIN_PANEL_PROPERTIES,
-        events: SWAP_CHAIN_PANEL_EVENTS,
-        slots: SWAP_CHAIN_PANEL_SLOTS,
-        selection: None,
-        controlled_collection: None,
-    },
-];
-pub fn selection_for_event(event: EventId) -> Option<SelectionDescriptor> {
-    CONTROLS.iter().find_map(|control| {
-        control
-            .selection
-            .filter(|selection| selection.event == event)
-    })
-}
-pub fn selection_for_slot(slot: SlotId) -> Option<SelectionDescriptor> {
-    CONTROLS
-        .iter()
-        .find_map(|control| control.selection.filter(|selection| selection.slot == slot))
-}
-pub fn selection_for_item_property(
-    property: PropertyId,
-    slot: SlotId,
-) -> Option<SelectionDescriptor> {
-    CONTROLS.iter().find_map(|control| {
-        control
-            .selection
-            .filter(|selection| selection.selected_property == property && selection.slot == slot)
-    })
-}
+const PIVOT_CONTROLLED_COLLECTION: ControlledCollectionDescriptor =
+    ControlledCollectionDescriptor {
+        slot: SlotId::PivotItems,
+        property: PropertyId::PivotSelectedIndex,
+        event: EventId::PivotSelectionChanged,
+    };
+const FLIP_VIEW_CONTROLLED_COLLECTION: ControlledCollectionDescriptor =
+    ControlledCollectionDescriptor {
+        slot: SlotId::FlipViewItems,
+        property: PropertyId::FlipViewSelectedIndex,
+        event: EventId::FlipViewSelectionChanged,
+    };
+const TAB_VIEW_CONTROLLED_COLLECTION: ControlledCollectionDescriptor =
+    ControlledCollectionDescriptor {
+        slot: SlotId::TabViewTabItems,
+        property: PropertyId::TabViewSelectedIndex,
+        event: EventId::TabViewSelectionChanged,
+    };
+const LIST_VIEW_CONTROLLED_COLLECTION: ControlledCollectionDescriptor =
+    ControlledCollectionDescriptor {
+        slot: SlotId::ListViewItems,
+        property: PropertyId::ListViewSelectedIndex,
+        event: EventId::ListViewSelectionChanged,
+    };
+const GRID_VIEW_CONTROLLED_COLLECTION: ControlledCollectionDescriptor =
+    ControlledCollectionDescriptor {
+        slot: SlotId::GridViewItems,
+        property: PropertyId::GridViewSelectedIndex,
+        event: EventId::GridViewSelectionChanged,
+    };
 pub fn controlled_collection_for_slot(slot: SlotId) -> Option<ControlledCollectionDescriptor> {
-    CONTROLS.iter().find_map(|control| {
-        control
-            .controlled_collection
-            .filter(|collection| collection.slot == slot)
-    })
+    match slot {
+        SlotId::PivotItems => Some(PIVOT_CONTROLLED_COLLECTION),
+        SlotId::FlipViewItems => Some(FLIP_VIEW_CONTROLLED_COLLECTION),
+        SlotId::TabViewTabItems => Some(TAB_VIEW_CONTROLLED_COLLECTION),
+        SlotId::ListViewItems => Some(LIST_VIEW_CONTROLLED_COLLECTION),
+        SlotId::GridViewItems => Some(GRID_VIEW_CONTROLLED_COLLECTION),
+        _ => None,
+    }
 }
 pub fn controlled_collection_for_property(
     property: PropertyId,
 ) -> Option<ControlledCollectionDescriptor> {
-    CONTROLS.iter().find_map(|control| {
-        control
-            .controlled_collection
-            .filter(|collection| collection.property == property)
-    })
-}
-const _: () = {
-    let _: Option<PropertyValue> = None;
-    let mut control_index = 0;
-    while control_index < CONTROLS.len() {
-        let control = &CONTROLS[control_index];
-        let _ = (
-            control.name,
-            control.type_name,
-            control.kind,
-            control.role,
-            control.capabilities,
-            control.slots,
-            control.controlled_collection,
-        );
-        let mut property_index = 0;
-        while property_index < control.properties.len() {
-            let property = &control.properties[property_index];
-            let _ = (
-                property.name,
-                property.id,
-                property.field,
-                property.value,
-                property.interface,
-                property.clearable,
-                property.feedback,
-                property.feedback_contract,
-                property.observes_feedback,
-            );
-            property_index += 1;
-        }
-        let mut event_index = 0;
-        while event_index < control.events.len() {
-            let event = &control.events[event_index];
-            let _ = (
-                event.id,
-                event.name,
-                event.field,
-                event.payload,
-                event.interface,
-            );
-            event_index += 1;
-        }
-        let mut slot_index = 0;
-        while slot_index < control.slots.len() {
-            let slot = &control.slots[slot_index];
-            let _ = (slot.id, slot.name, slot.interface, slot.target);
-            slot_index += 1;
-        }
-        control_index += 1;
+    match property {
+        PropertyId::PivotSelectedIndex => Some(PIVOT_CONTROLLED_COLLECTION),
+        PropertyId::FlipViewSelectedIndex => Some(FLIP_VIEW_CONTROLLED_COLLECTION),
+        PropertyId::TabViewSelectedIndex => Some(TAB_VIEW_CONTROLLED_COLLECTION),
+        PropertyId::ListViewSelectedIndex => Some(LIST_VIEW_CONTROLLED_COLLECTION),
+        PropertyId::GridViewSelectedIndex => Some(GRID_VIEW_CONTROLLED_COLLECTION),
+        _ => None,
     }
-};
+}

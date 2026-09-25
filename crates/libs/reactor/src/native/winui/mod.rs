@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::*;
+use crate::VirtualKey as ReactorVirtualKey;
 use windows_core::Interface;
 
 windows_core::link!("kernel32.dll" "system" fn FindResourceW(module: *mut std::ffi::c_void, name: *const u16, resource_type: *const u16) -> *mut std::ffi::c_void);
@@ -26,6 +27,10 @@ windows_core::link!("kernel32.dll" "system" fn SizeofResource(module: *mut std::
 )]
 mod bindings;
 pub use bindings::*;
+pub(crate) use bindings::{
+    Grid as NativeGrid, HorizontalAlignment as NativeHorizontalAlignment,
+    VerticalAlignment as NativeVerticalAlignment,
+};
 mod app_shim;
 pub use app_shim::*;
 mod bootstrap;
@@ -43,6 +48,362 @@ mod grid;
 pub(crate) mod test;
 #[cfg(feature = "test")]
 pub(crate) use test::native_window_handle;
+
+fn unit_event_handler<TSender, TArgs>(
+    sink: EventSink,
+    node: NodeId,
+    event: EventId,
+    revision: u32,
+) -> impl Fn(windows_core::Ref<TSender>, windows_core::Ref<TArgs>)
+where
+    TSender: windows_core::RuntimeType + 'static,
+    TArgs: windows_core::RuntimeType + 'static,
+{
+    move |_, _| sink.enqueue(node, event, revision, EventPayload::Unit)
+}
+
+fn drag_info_event_handler(
+    sink: EventSink,
+    node: NodeId,
+    event: EventId,
+    revision: u32,
+) -> impl Fn(windows_core::Ref<windows_core::IInspectable>, windows_core::Ref<DragEventArgs>) {
+    move |_, args| {
+        let result = args
+            .as_ref()
+            .ok_or_else(windows_core::Error::empty)
+            .and_then(|args| {
+                let data = args.DataView()?;
+                let kind = if data.Contains("Shell IDList Array")? {
+                    DragKind::StorageItems
+                } else if data.Contains("Text")? {
+                    DragKind::Text
+                } else {
+                    DragKind::Unsupported
+                };
+                let action = sink.drag_action(node, kind);
+                args.SetAcceptedOperation(
+                    action
+                        .as_ref()
+                        .map_or(DataPackageOperation::None, |action| {
+                            native_drag_operation(action.operation)
+                        }),
+                )?;
+                let ui = args.DragUIOverride()?;
+                if let Some(caption) = action.as_ref().and_then(|action| action.caption.as_deref())
+                {
+                    ui.SetCaption(caption)?;
+                    ui.SetIsCaptionVisible(true)?;
+                } else {
+                    ui.SetIsCaptionVisible(false)?;
+                }
+                Ok(action.map_or(DragKind::Unsupported, |_| kind))
+            });
+        match result {
+            Ok(kind) => sink.enqueue(node, event, revision, EventPayload::DragKind(kind)),
+            Err(error) => sink.error(node, event, revision, native_error(error)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PointerEventPhase {
+    Plain,
+    Press,
+    Release,
+}
+
+fn pointer_event_handler(
+    sink: EventSink,
+    node: NodeId,
+    event: EventId,
+    revision: u32,
+    element: UIElement,
+    phase: PointerEventPhase,
+) -> impl Fn(windows_core::Ref<windows_core::IInspectable>, windows_core::Ref<PointerRoutedEventArgs>)
+{
+    move |_, args| {
+        let mut info = PointerEventInfo::default();
+        if let Some(args) = args.as_ref() {
+            if let Ok(point) = args.GetCurrentPoint(&element) {
+                if let Ok(position) = point.Position() {
+                    info.x = f64::from(position.x);
+                    info.y = f64::from(position.y);
+                }
+                if let Ok(properties) = point.Properties() {
+                    info.is_left_button_pressed = properties.IsLeftButtonPressed().unwrap_or(false);
+                    info.is_right_button_pressed =
+                        properties.IsRightButtonPressed().unwrap_or(false);
+                    info.is_middle_button_pressed =
+                        properties.IsMiddleButtonPressed().unwrap_or(false);
+                }
+            }
+            if let Ok(point) = args.GetCurrentPoint(None::<&UIElement>)
+                && let Ok(position) = point.Position()
+            {
+                info.window_x = f64::from(position.x);
+                info.window_y = f64::from(position.y);
+            }
+        }
+        if phase == PointerEventPhase::Press {
+            info.capture_succeeded = match sink.apply_pointer_press_policy(node, &element, args) {
+                Ok(value) => value,
+                Err(error) => {
+                    sink.error(node, event, revision, error);
+                    return;
+                }
+            };
+        } else if phase == PointerEventPhase::Release
+            && let Err(error) =
+                sink.apply_pointer_release_policy(node, event, revision, &element, args)
+        {
+            sink.error(node, event, revision, error);
+            return;
+        }
+        sink.enqueue(node, event, revision, EventPayload::PointerEventInfo(info));
+    }
+}
+
+fn key_event_handler(
+    sink: EventSink,
+    node: NodeId,
+    event: EventId,
+    revision: u32,
+) -> impl Fn(windows_core::Ref<windows_core::IInspectable>, windows_core::Ref<KeyRoutedEventArgs>) {
+    move |_, args| {
+        let result = args
+            .as_ref()
+            .ok_or_else(windows_core::Error::empty)
+            .and_then(key_event_info);
+        match result {
+            Ok(info) => {
+                let handled = sink.route_key(node, event, revision, info);
+                if let Some(args) = args.as_ref()
+                    && let Err(error) = args.SetHandled(handled)
+                {
+                    sink.error(node, event, revision, native_error(error));
+                }
+            }
+            Err(error) => sink.error(node, event, revision, native_error(error)),
+        }
+    }
+}
+
+enum RoutedEventAction {
+    Unit,
+    Focus(UIElement, bool),
+    Password(IPasswordBox),
+    ToggleSwitch(IToggleSwitch),
+    RichEdit(IRichEditBox),
+}
+
+fn routed_event_handler(
+    sink: EventSink,
+    node: NodeId,
+    event: EventId,
+    revision: u32,
+    action: RoutedEventAction,
+) -> impl Fn(windows_core::Ref<windows_core::IInspectable>, windows_core::Ref<RoutedEventArgs>) {
+    move |_, args| match &action {
+        RoutedEventAction::Unit => {
+            sink.enqueue(node, event, revision, EventPayload::Unit);
+        }
+        RoutedEventAction::Focus(element, got_focus) => {
+            let result = args
+                .as_ref()
+                .ok_or_else(windows_core::Error::empty)
+                .and_then(|args| {
+                    focus_event_info(
+                        element,
+                        args,
+                        got_focus
+                            .then(|| sink.take_pending_focus_state(node))
+                            .flatten(),
+                        *got_focus,
+                    )
+                });
+            match result {
+                Ok(info) => sink.enqueue(node, event, revision, EventPayload::FocusEventInfo(info)),
+                Err(error) => sink.error(node, event, revision, native_error(error)),
+            }
+        }
+        RoutedEventAction::Password(source) => match source.Password() {
+            Ok(value) => sink.enqueue(node, event, revision, EventPayload::Str(value)),
+            Err(error) => sink.error(node, event, revision, native_error(error)),
+        },
+        RoutedEventAction::ToggleSwitch(source) => match source.IsOn() {
+            Ok(value) => sink.enqueue(node, event, revision, EventPayload::Bool(value)),
+            Err(error) => sink.error(node, event, revision, native_error(error)),
+        },
+        RoutedEventAction::RichEdit(source) => {
+            let value = source.Document().and_then(|document| {
+                let mut value = windows_core::HSTRING::new();
+                document
+                    .GetText(TextGetOptions::UseLf, &mut value)
+                    .map(|_| value)
+            });
+            match value {
+                Ok(value) => {
+                    sink.enqueue_rich_edit_text(node, event, revision, value.to_string_lossy());
+                }
+                Err(error) => sink.error(node, event, revision, native_error(error)),
+            }
+        }
+    }
+}
+
+enum SelectionChangedAction {
+    IndexSelector(ISelector),
+    IndexRadioButtons(IRadioButtons),
+    IndexPivot(IPivot),
+    IndexTabView(ITabView),
+    ListBox(ISelector),
+}
+
+fn selection_changed_handler(
+    sink: EventSink,
+    node: NodeId,
+    event: EventId,
+    revision: u32,
+    action: SelectionChangedAction,
+) -> impl Fn(windows_core::Ref<windows_core::IInspectable>, windows_core::Ref<SelectionChangedEventArgs>)
+{
+    move |_, _| {
+        if let SelectionChangedAction::ListBox(source) = &action {
+            match source.SelectedItem() {
+                Ok(item) => {
+                    let selected = sink.selection_item(&item);
+                    match selection_payload(selection_for_event(event).unwrap(), &item) {
+                        Ok(tag) => sink.enqueue(
+                            node,
+                            event,
+                            revision,
+                            EventPayload::SelectionChange(SelectionChange {
+                                item: selected,
+                                tag,
+                            }),
+                        ),
+                        Err(error) => sink.error(node, event, revision, error),
+                    }
+                }
+                Err(error) if error.code().is_ok() => sink.enqueue(
+                    node,
+                    event,
+                    revision,
+                    EventPayload::SelectionChange(SelectionChange {
+                        item: None,
+                        tag: None,
+                    }),
+                ),
+                Err(error) => sink.error(node, event, revision, native_error(error)),
+            }
+            return;
+        }
+        let value = match &action {
+            SelectionChangedAction::IndexSelector(source) => source.SelectedIndex(),
+            SelectionChangedAction::IndexRadioButtons(source) => source.SelectedIndex(),
+            SelectionChangedAction::IndexPivot(source) => source.SelectedIndex(),
+            SelectionChangedAction::IndexTabView(source) => source.SelectedIndex(),
+            SelectionChangedAction::ListBox(_) => unreachable!(),
+        };
+        match value {
+            Ok(value) => {
+                let value = match selection_index(value) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        sink.error(node, event, revision, error);
+                        return;
+                    }
+                };
+                sink.enqueue(node, event, revision, EventPayload::SelectionIndex(value));
+            }
+            Err(error) => sink.error(node, event, revision, native_error(error)),
+        }
+    }
+}
+
+fn list_view_items_changed_handler(
+    sink: EventSink,
+    node: NodeId,
+    event: EventId,
+    revision: u32,
+) -> impl Fn(windows_core::Ref<ListViewBase>, windows_core::Ref<DragItemsCompletedEventArgs>) {
+    move |sender, _| {
+        if let Some(sender) = sender.as_ref() {
+            let result = sender
+                .cast::<IItemsControl>()
+                .and_then(|sender| sender.Items())
+                .and_then(|items| {
+                    let mut tags = Vec::with_capacity(items.Size()? as usize);
+                    for index in 0..items.Size()? {
+                        let tag = items
+                            .GetAt(index)?
+                            .cast::<IFrameworkElement>()?
+                            .Tag()?
+                            .cast::<windows_reference::IReference<windows_core::HSTRING>>()?
+                            .Value()?;
+                        tags.push(tag.to_string_lossy());
+                    }
+                    Ok(tags)
+                });
+            match result {
+                Ok(value) => {
+                    sink.enqueue(node, event, revision, EventPayload::StrList(Rc::new(value)));
+                }
+                Err(error) => sink.error(node, event, revision, native_error(error)),
+            }
+        }
+    }
+}
+
+fn toggle_button_checked_handler(
+    sink: EventSink,
+    node: NodeId,
+    event: EventId,
+    revision: u32,
+    source: IToggleButton,
+) -> impl Fn(windows_core::Ref<DependencyObject>, windows_core::Ref<DependencyProperty>) {
+    move |_, _| match source.IsChecked() {
+        Ok(value) => sink.enqueue(node, event, revision, EventPayload::Bool(value)),
+        Err(error) => sink.error(node, event, revision, native_error(error)),
+    }
+}
+
+impl Handle {
+    pub fn ui_element(&self) -> windows_core::Result<UIElement> {
+        self.inspectable().cast()
+    }
+
+    pub fn dependency_object(&self) -> windows_core::Result<IDependencyObject> {
+        self.inspectable().cast()
+    }
+}
+
+#[inline]
+fn set_content_control<T: Interface>(
+    control: &T,
+    child: Option<&UIElement>,
+) -> Result<(), RuntimeError> {
+    let control = control.cast::<IContentControl>().map_err(native_error)?;
+    match child {
+        Some(child) => control.SetContent(child).map_err(native_error),
+        None => control
+            .SetContent(None::<&windows_core::IInspectable>)
+            .map_err(native_error),
+    }
+}
+
+#[inline]
+fn clear_value(
+    handle: &Handle,
+    property: impl FnOnce() -> windows_core::Result<DependencyProperty>,
+) -> Result<(), RuntimeError> {
+    handle
+        .dependency_object()
+        .map_err(native_error)?
+        .ClearValue(&property().map_err(native_error)?)
+        .map_err(native_error)
+}
 
 enum PropertyTarget<'a> {
     Framework(UIElement),
@@ -67,7 +428,8 @@ impl<'a> PropertyTarget<'a> {
             | PropertyId::Opacity
             | PropertyId::HorizontalAlignment
             | PropertyId::VerticalAlignment
-            | PropertyId::Margin => Self::Framework(runtime.ui_element(node)?),
+            | PropertyId::Margin
+            | PropertyId::Transitions => Self::Framework(runtime.ui_element(node)?),
             PropertyId::GridRow
             | PropertyId::GridColumn
             | PropertyId::GridRowSpan
@@ -129,6 +491,18 @@ pub enum NativeSubscription {
     },
 }
 
+#[derive(Clone, Copy, Default)]
+struct PointerInteractionPolicy {
+    capture: bool,
+    focus_on_release: bool,
+}
+
+impl PointerInteractionPolicy {
+    fn is_empty(self) -> bool {
+        !self.capture && !self.focus_on_release
+    }
+}
+
 impl Drop for NativeSubscription {
     fn drop(&mut self) {
         if let Self::Property {
@@ -153,12 +527,15 @@ pub struct WinUiRuntime {
     async_state: Rc<RefCell<AsyncIngressState>>,
     encoded_image_nodes: Rc<RefCell<HashSet<NodeId>>>,
     feedback: Rc<RefCell<HashMap<(NodeId, EventId), FeedbackExpectation>>>,
+    rich_edit_feedback: Rc<RefCell<HashMap<NodeId, String>>>,
     controlled_collection_indices: HashMap<NodeId, i32>,
     content_dialogs: Rc<RefCell<ContentDialogScheduler>>,
     drop_policies: Rc<RefCell<HashMap<NodeId, DragDropPolicy>>>,
     flyouts: HashMap<NodeId, (bindings::Flyout, NodeId)>,
     owned_menus: HashMap<NodeId, NativeOwnedMenu>,
-    pointer_capture: Rc<RefCell<HashMap<NodeId, bool>>>,
+    pending_focus_states: Rc<RefCell<HashMap<NodeId, ElementFocusState>>>,
+    pointer_policies: Rc<RefCell<HashMap<NodeId, PointerInteractionPolicy>>>,
+    routed_callbacks: Rc<RefCell<HashMap<(NodeId, EventId), RoutedEventCallback>>>,
     resource_override_keys: HashMap<NodeId, HashSet<String>>,
     command_bar_flyouts: HashMap<NodeId, NativeCommandBarFlyout>,
     identity: Rc<Cell<Option<WindowToken>>>,
@@ -411,68 +788,48 @@ fn build_command_bar_element(
     }
 }
 
-fn build_menu_items(
+pub(crate) fn build_native_menu_items(
     items: &[MenuItem],
-    owner: NodeId,
-    revision: u32,
-    sink: &EventSink,
     output: &windows_collections::IVector<MenuFlyoutItemBase>,
     revokers: &mut Vec<windows_core::EventRevoker>,
-) -> Result<(), RuntimeError> {
+    invoke: &Rc<dyn Fn(String)>,
+) -> windows_core::Result<()> {
     for item in items {
         let native: MenuFlyoutItemBase = match item {
             MenuItem::Item { label, enabled, .. } => {
-                let item = MenuFlyoutItem::new().map_err(native_error)?;
-                item.SetText(label).map_err(native_error)?;
+                let item = MenuFlyoutItem::new()?;
+                item.SetText(label)?;
                 item.cast::<IControl>()
-                    .and_then(|control| control.SetIsEnabled(*enabled))
-                    .map_err(native_error)?;
+                    .and_then(|control| control.SetIsEnabled(*enabled))?;
                 let label = label.clone();
-                let sink = sink.clone();
-                revokers.push(
-                    item.Click(move |_, _| {
-                        sink.enqueue(
-                            owner,
-                            EventId::OwnedMenuItemInvoked,
-                            revision,
-                            EventPayload::String(label.clone()),
-                        );
-                    })
-                    .map_err(native_error)?,
-                );
-                item.cast().map_err(native_error)?
+                let invoke = Rc::clone(invoke);
+                revokers.push(item.Click(move |_, _| invoke(label.clone()))?);
+                item.cast()?
             }
-            MenuItem::Separator { .. } => MenuFlyoutSeparator::new()
-                .and_then(|separator| separator.cast())
-                .map_err(native_error)?,
+            MenuItem::Separator { .. } => {
+                MenuFlyoutSeparator::new().and_then(|separator| separator.cast())?
+            }
             MenuItem::Submenu { label, items, .. } => {
-                let submenu = MenuFlyoutSubItem::new().map_err(native_error)?;
-                submenu.SetText(label).map_err(native_error)?;
-                build_menu_items(
-                    items,
-                    owner,
-                    revision,
-                    sink,
-                    &submenu.Items().map_err(native_error)?,
-                    revokers,
-                )?;
-                submenu.cast().map_err(native_error)?
+                let submenu = MenuFlyoutSubItem::new()?;
+                submenu.SetText(label)?;
+                build_native_menu_items(items, &submenu.Items()?, revokers, invoke)?;
+                submenu.cast()?
             }
         };
-        output.Append(&native).map_err(native_error)?;
+        output.Append(&native)?;
     }
     Ok(())
 }
 
-fn set_rich_edit_text(control: &bindings::RichEditBox, value: &str) -> Result<(), RuntimeError> {
+fn set_rich_edit_text(control: &bindings::RichEditBox, value: &str) -> Result<bool, RuntimeError> {
     let read_only = control.IsReadOnly().map_err(native_error)?;
     let document = control.Document().map_err(native_error)?;
     let mut current = windows_core::HSTRING::new();
     document
-        .GetText(TextGetOptions::None, &mut current)
+        .GetText(TextGetOptions::UseLf, &mut current)
         .map_err(native_error)?;
     if current == value {
-        return Ok(());
+        return Ok(false);
     }
     if read_only {
         control.SetIsReadOnly(false).map_err(native_error)?;
@@ -485,7 +842,7 @@ fn set_rich_edit_text(control: &bindings::RichEditBox, value: &str) -> Result<()
     } else {
         Ok(())
     };
-    write.and(restore)
+    write.and(restore).map(|_| true)
 }
 
 fn build_tree_node(definition: &TreeNode) -> Result<TreeViewNode, RuntimeError> {
@@ -844,7 +1201,7 @@ impl WinUiRuntime {
             let (min_width, min_height, max_width, max_height) =
                 if let Some(constraints) = visuals.constraints {
                     let hwnd = window_handle()?;
-                    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+                    let dpi = unsafe { GetDpiForWindow(hwnd.cast()) }.max(96);
                     let pixels = |dips: f64| (dips * f64::from(dpi) / 96.0).round() as i32;
                     let client_window = app_window.cast::<IAppWindow2>().map_err(native_error)?;
                     let outer = app_window.Size().map_err(native_error)?;
@@ -880,7 +1237,7 @@ impl WinUiRuntime {
             && let Some((width, height)) = visuals.client_size
         {
             let hwnd = window_handle()?;
-            let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+            let dpi = unsafe { GetDpiForWindow(hwnd.cast()) }.max(96);
             let pixels = |dips: f64| (dips * f64::from(dpi) / 96.0).round() as i32;
             window_2
                 .AppWindow()
@@ -930,8 +1287,9 @@ impl WinUiRuntime {
             .get(&node)
             .ok_or(RuntimeError::MissingNode(node))?;
         let title_bar_element = self.ui_element(title_bar)?;
-        window
-            .SetExtendsContentIntoTitleBar(true)
+        title_bar_element
+            .SetIsTabStop(false)
+            .and_then(|()| window.SetExtendsContentIntoTitleBar(true))
             .and_then(|()| window.SetTitleBar(&title_bar_element))
             .map_err(native_error)?;
         let height_option = match height {
@@ -1267,30 +1625,30 @@ impl WinUiRuntime {
             let value = KeyboardAccelerator::new().map_err(native_error)?;
             value
                 .SetKey(match accelerator.key {
-                    AcceleratorKey::Left => VirtualKey::Left,
-                    AcceleratorKey::Up => VirtualKey::Up,
-                    AcceleratorKey::Right => VirtualKey::Right,
-                    AcceleratorKey::Down => VirtualKey::Down,
-                    AcceleratorKey::Space => VirtualKey::Space,
-                    AcceleratorKey::N => VirtualKey::N,
-                    AcceleratorKey::P => VirtualKey::P,
-                    AcceleratorKey::R => VirtualKey::R,
-                    AcceleratorKey::NumberPad0 => VirtualKey::NumberPad0,
-                    AcceleratorKey::NumberPad1 => VirtualKey::NumberPad1,
-                    AcceleratorKey::NumberPad2 => VirtualKey::NumberPad2,
-                    AcceleratorKey::NumberPad3 => VirtualKey::NumberPad3,
-                    AcceleratorKey::NumberPad4 => VirtualKey::NumberPad4,
-                    AcceleratorKey::NumberPad5 => VirtualKey::NumberPad5,
-                    AcceleratorKey::NumberPad6 => VirtualKey::NumberPad6,
-                    AcceleratorKey::NumberPad7 => VirtualKey::NumberPad7,
-                    AcceleratorKey::NumberPad8 => VirtualKey::NumberPad8,
-                    AcceleratorKey::NumberPad9 => VirtualKey::NumberPad9,
-                    AcceleratorKey::Divide => VirtualKey::Divide,
-                    AcceleratorKey::Multiply => VirtualKey::Multiply,
-                    AcceleratorKey::Subtract => VirtualKey::Subtract,
-                    AcceleratorKey::Add => VirtualKey::Add,
-                    AcceleratorKey::Decimal => VirtualKey::Decimal,
-                    AcceleratorKey::Enter => VirtualKey::Enter,
+                    AcceleratorKey::Left => bindings::VirtualKey::Left,
+                    AcceleratorKey::Up => bindings::VirtualKey::Up,
+                    AcceleratorKey::Right => bindings::VirtualKey::Right,
+                    AcceleratorKey::Down => bindings::VirtualKey::Down,
+                    AcceleratorKey::Space => bindings::VirtualKey::Space,
+                    AcceleratorKey::N => bindings::VirtualKey::N,
+                    AcceleratorKey::P => bindings::VirtualKey::P,
+                    AcceleratorKey::R => bindings::VirtualKey::R,
+                    AcceleratorKey::NumberPad0 => bindings::VirtualKey::NumberPad0,
+                    AcceleratorKey::NumberPad1 => bindings::VirtualKey::NumberPad1,
+                    AcceleratorKey::NumberPad2 => bindings::VirtualKey::NumberPad2,
+                    AcceleratorKey::NumberPad3 => bindings::VirtualKey::NumberPad3,
+                    AcceleratorKey::NumberPad4 => bindings::VirtualKey::NumberPad4,
+                    AcceleratorKey::NumberPad5 => bindings::VirtualKey::NumberPad5,
+                    AcceleratorKey::NumberPad6 => bindings::VirtualKey::NumberPad6,
+                    AcceleratorKey::NumberPad7 => bindings::VirtualKey::NumberPad7,
+                    AcceleratorKey::NumberPad8 => bindings::VirtualKey::NumberPad8,
+                    AcceleratorKey::NumberPad9 => bindings::VirtualKey::NumberPad9,
+                    AcceleratorKey::Divide => bindings::VirtualKey::Divide,
+                    AcceleratorKey::Multiply => bindings::VirtualKey::Multiply,
+                    AcceleratorKey::Subtract => bindings::VirtualKey::Subtract,
+                    AcceleratorKey::Add => bindings::VirtualKey::Add,
+                    AcceleratorKey::Decimal => bindings::VirtualKey::Decimal,
+                    AcceleratorKey::Enter => bindings::VirtualKey::Enter,
                 })
                 .map_err(native_error)?;
             value
@@ -1312,6 +1670,44 @@ impl WinUiRuntime {
             values.Append(&value).map_err(native_error)?;
         }
         Ok(())
+    }
+
+    fn set_pointer_policy(
+        &self,
+        node: NodeId,
+        property: PropertyId,
+        value: &PropertyValue,
+    ) -> Result<(), RuntimeError> {
+        let PropertyValue::Bool(value) = value else {
+            return Err(RuntimeError::UnsupportedKind);
+        };
+        let element = self.ui_element(node)?;
+        let mut policy = self
+            .pointer_policies
+            .borrow()
+            .get(&node)
+            .copied()
+            .unwrap_or_default();
+        match property {
+            PropertyId::BorderCapturePointerOnPress => {
+                policy.capture = *value;
+                if !value {
+                    element.ReleasePointerCaptures().map_err(native_error)?;
+                }
+            }
+            PropertyId::BorderFocusOnPointerRelease => policy.focus_on_release = *value,
+            _ => return Err(RuntimeError::UnsupportedKind),
+        }
+        if policy.is_empty() {
+            self.pointer_policies.borrow_mut().remove(&node);
+        } else {
+            self.pointer_policies.borrow_mut().insert(node, policy);
+        }
+        Ok(())
+    }
+
+    fn clear_pointer_policy(&self, node: NodeId, property: PropertyId) -> Result<(), RuntimeError> {
+        self.set_pointer_policy(node, property, &PropertyValue::Bool(false))
     }
 
     fn apply_one(&mut self, command: &Command) -> Result<(), RuntimeError> {
@@ -1354,6 +1750,24 @@ impl WinUiRuntime {
                     .ok_or(RuntimeError::MissingNode(*node))?
                     .Activate()
                     .map_err(native_error)?;
+            }
+            Command::RequestWindowActivation { node } => {
+                let window = self
+                    .windows
+                    .get(node)
+                    .ok_or(RuntimeError::MissingNode(*node))?;
+                window.Activate().map_err(native_error)?;
+                if let Ok(native) = window.cast::<IWindowNative>() {
+                    let mut hwnd = std::ptr::null_mut();
+                    unsafe {
+                        if native.WindowHandle(&mut hwnd).is_ok() {
+                            if IsIconic(hwnd.cast()).as_bool() {
+                                _ = ShowWindow(hwnd.cast(), SW_RESTORE);
+                            }
+                            _ = SetForegroundWindow(hwnd.cast());
+                        }
+                    }
+                }
             }
             Command::CloseWindow { node } => {
                 self.windows
@@ -1495,9 +1909,43 @@ impl WinUiRuntime {
 
             Command::Focus { node, completion } => {
                 let result = self.ui_element(*node).and_then(|element| {
-                    element
+                    self.pending_focus_states
+                        .borrow_mut()
+                        .insert(*node, ElementFocusState::Programmatic);
+                    match element
                         .Focus(FocusState::Programmatic)
                         .map_err(native_error)
+                    {
+                        Ok(true) => {
+                            let pending = Rc::clone(&self.pending_focus_states);
+                            let focus_node = *node;
+                            let cleanup = DispatcherQueueHandler::new(move || {
+                                pending.borrow_mut().remove(&focus_node);
+                            });
+                            let accepted = DispatcherQueue::GetForCurrentThread()
+                                .and_then(|dispatcher| {
+                                    dispatcher.TryEnqueueWithPriority(
+                                        DispatcherQueuePriority::Low,
+                                        &cleanup,
+                                    )
+                                })
+                                .map_err(native_error)?;
+                            if accepted {
+                                Ok(true)
+                            } else {
+                                self.pending_focus_states.borrow_mut().remove(node);
+                                Err(RuntimeError::DispatcherRejected)
+                            }
+                        }
+                        Ok(false) => {
+                            self.pending_focus_states.borrow_mut().remove(node);
+                            Ok(false)
+                        }
+                        Err(error) => {
+                            self.pending_focus_states.borrow_mut().remove(node);
+                            Err(error)
+                        }
+                    }
                 });
                 _ = completion.call(result);
             }
@@ -1610,6 +2058,7 @@ impl WinUiRuntime {
             Command::ObserveSwapChainPanel {
                 node,
                 observation,
+                binding,
                 callback,
             } => {
                 let Some(Handle::SwapChainPanel(control)) = self.handles.get(node) else {
@@ -1619,9 +2068,11 @@ impl WinUiRuntime {
                         RuntimeError::MissingNode(*node)
                     });
                 };
+                let binding = *binding;
                 let element = control.cast::<IFrameworkElement>().map_err(native_error)?;
                 let emit_metrics = |width: f64, height: f64| {
                     let event = SwapChainPanelEvent::Metrics {
+                        binding,
                         width,
                         height,
                         scale_x: control.CompositionScaleX().unwrap_or(1.0),
@@ -1644,6 +2095,7 @@ impl WinUiRuntime {
                             invoke_callback(
                                 &size_callback,
                                 SwapChainPanelEvent::Metrics {
+                                    binding,
                                     width: f64::from(value.width),
                                     height: f64::from(value.height),
                                     scale_x: size_control.CompositionScaleX().unwrap_or(1.0),
@@ -1661,6 +2113,7 @@ impl WinUiRuntime {
                             invoke_callback(
                                 &scale_callback,
                                 SwapChainPanelEvent::Metrics {
+                                    binding,
                                     width: scale_element.ActualWidth().unwrap_or(0.0),
                                     height: scale_element.ActualHeight().unwrap_or(0.0),
                                     scale_x: sender.CompositionScaleX().unwrap_or(1.0),
@@ -1683,6 +2136,34 @@ impl WinUiRuntime {
                         _size: size,
                     },
                 );
+            }
+            Command::RequestSwapChainPanelFrame { node, completion } => {
+                let result = match self.handles.get(node) {
+                    Some(Handle::SwapChainPanel(_)) => {
+                        let completion = completion.clone();
+                        let handler = DispatcherQueueHandler::new(move || {
+                            _ = completion.call(Ok(()));
+                        });
+                        DispatcherQueue::GetForCurrentThread()
+                            .map_err(native_error)
+                            .and_then(|dispatcher| {
+                                dispatcher
+                                    .TryEnqueueWithPriority(
+                                        DispatcherQueuePriority::Normal,
+                                        &handler,
+                                    )
+                                    .map_err(native_error)
+                            })
+                            .and_then(|accepted| {
+                                accepted.then_some(()).ok_or(RuntimeError::SchedulerClosed)
+                            })
+                    }
+                    Some(_) => Err(RuntimeError::UnsupportedKind),
+                    None => Err(RuntimeError::MissingNode(*node)),
+                };
+                if let Err(error) = result {
+                    _ = completion.call(Err(error));
+                }
             }
             Command::SetSwapChain {
                 node,
@@ -1913,21 +2394,12 @@ impl WinUiRuntime {
                         .insert((*node, event), expectation);
                 }
                 let (result, observation) = self.with_selection_suppressed(selection_owner, || {
-                    let result = if *property == PropertyId::BorderCapturePointerOnPress {
-                        match value {
-                            PropertyValue::Bool(true) => self.ui_element(*node).map(|_| {
-                                self.pointer_capture.borrow_mut().insert(*node, true);
-                            }),
-                            PropertyValue::Bool(false) => self
-                                .ui_element(*node)
-                                .and_then(|element| {
-                                    element.ReleasePointerCaptures().map_err(native_error)
-                                })
-                                .map(|_| {
-                                    self.pointer_capture.borrow_mut().remove(node);
-                                }),
-                            _ => Err(RuntimeError::UnsupportedKind),
-                        }
+                    let result = if matches!(
+                        property,
+                        PropertyId::BorderCapturePointerOnPress
+                            | PropertyId::BorderFocusOnPointerRelease
+                    ) {
+                        self.set_pointer_policy(*node, *property, value)
                     } else if *property == PropertyId::BorderAllowDrop {
                         match value {
                             PropertyValue::DragDropPolicy(policy) => self
@@ -1947,6 +2419,8 @@ impl WinUiRuntime {
                                 }),
                             _ => Err(RuntimeError::UnsupportedKind),
                         }
+                    } else if *property == PropertyId::RichEditBoxDocument {
+                        self.set_rich_edit_text(*node, value)
                     } else {
                         target.set(*property, value)
                     };
@@ -2005,30 +2479,48 @@ impl WinUiRuntime {
                         .borrow_mut()
                         .insert((*node, event), expectation);
                 }
-                let result = self.with_selection_suppressed(selection_owner, || {
-                    let result = if *property == PropertyId::BorderCapturePointerOnPress {
-                        self.ui_element(*node)?
-                            .ReleasePointerCaptures()
-                            .map_err(native_error)?;
-                        self.pointer_capture.borrow_mut().remove(node);
-                        Ok(())
-                    } else if *property == PropertyId::BorderAllowDrop {
-                        self.ui_element(*node)?
-                            .SetAllowDrop(false)
-                            .map_err(native_error)?;
-                        self.drop_policies.borrow_mut().remove(node);
-                        Ok(())
-                    } else {
-                        target.clear(*property)
-                    };
-                    if let Some(event) = feedback_event {
-                        self.feedback.borrow_mut().remove(&(*node, event));
-                    }
-                    result
+                let (result, observation) = self.with_selection_suppressed(selection_owner, || {
+                    let result = (|| {
+                        if matches!(
+                            property,
+                            PropertyId::BorderCapturePointerOnPress
+                                | PropertyId::BorderFocusOnPointerRelease
+                        ) {
+                            self.clear_pointer_policy(*node, *property)
+                        } else if *property == PropertyId::BorderAllowDrop {
+                            self.ui_element(*node)?
+                                .SetAllowDrop(false)
+                                .map_err(native_error)?;
+                            self.drop_policies.borrow_mut().remove(node);
+                            Ok(())
+                        } else if *property == PropertyId::RichEditBoxDocument {
+                            self.set_rich_edit_text(*node, &PropertyValue::Str(String::new()))
+                        } else {
+                            target.clear(*property)
+                        }
+                    })();
+                    let observation =
+                        feedback_event.and_then(|event| {
+                            self.feedback.borrow_mut().remove(&(*node, event)).and_then(
+                                |expectation| match expectation {
+                                    FeedbackExpectation::Normalized { observation } => observation,
+                                    FeedbackExpectation::Exact(_)
+                                    | FeedbackExpectation::Suppressed => None,
+                                },
+                            )
+                        });
+                    (result, observation)
                 });
                 result?;
                 if controlled_collection_for_property(*property).is_some() {
                     self.controlled_collection_indices.remove(node);
+                }
+                if let Some(observation) = observation {
+                    self.events.borrow_mut().push(NativeWork {
+                        identity: self.identity.get().unwrap(),
+                        work: observation,
+                    });
+                    self.schedule_dispatch()?;
                 }
             }
             Command::SubscribeEvent {
@@ -2237,18 +2729,27 @@ impl WinUiRuntime {
                     return Ok(());
                 };
                 let sink = self.event_sink()?;
+                let event_owner = *owner;
+                let event_revision = *revision;
+                let invoke: Rc<dyn Fn(String)> = Rc::new(move |label| {
+                    sink.enqueue(
+                        event_owner,
+                        EventId::OwnedMenuItemInvoked,
+                        event_revision,
+                        EventPayload::String(label),
+                    );
+                });
                 let mut revokers = Vec::new();
                 let flyout = match kind {
                     OwnedMenuKind::ButtonFlyout | OwnedMenuKind::DropDownButtonFlyout => {
                         let flyout = MenuFlyout::new().map_err(native_error)?;
-                        build_menu_items(
+                        build_native_menu_items(
                             items,
-                            *owner,
-                            *revision,
-                            &sink,
                             &flyout.Items().map_err(native_error)?,
                             &mut revokers,
-                        )?;
+                            &invoke,
+                        )
+                        .map_err(native_error)?;
                         self.ui_element(*target)?
                             .cast::<IButton>()
                             .and_then(|button| button.SetFlyout(&flyout))
@@ -2259,14 +2760,13 @@ impl WinUiRuntime {
                         let Some(Handle::MenuBarItem(item)) = self.handles.get(target) else {
                             return Err(RuntimeError::UnsupportedKind);
                         };
-                        build_menu_items(
+                        build_native_menu_items(
                             items,
-                            *owner,
-                            *revision,
-                            &sink,
                             &item.Items().map_err(native_error)?,
                             &mut revokers,
-                        )?;
+                            &invoke,
+                        )
+                        .map_err(native_error)?;
                         None
                     }
                 };
@@ -2339,15 +2839,11 @@ impl WinUiRuntime {
             }
             Command::SetContentDialogOpen { node, owner, open } => {
                 let owner = if *open {
-                    Some(
-                        self.ui_element(*owner)?
-                            .cast::<IUIElement>()
-                            .map_err(native_error)?,
-                    )
+                    Some(self.ui_element(*owner)?)
                 } else {
                     None
                 };
-                let xaml_root = match owner.as_ref().map(IUIElement::XamlRoot).transpose() {
+                let xaml_root = match owner.as_ref().map(|owner| owner.XamlRoot()).transpose() {
                     Ok(root) => root,
                     Err(error) if error.code().is_ok() => None,
                     Err(error) => return Err(native_error(error)),
@@ -2426,6 +2922,18 @@ impl WinUiRuntime {
                 Some(slot) => self.move_slot_child(*parent, *slot, *child, *index)?,
                 None => self.move_child(*parent, *child, *index)?,
             },
+            Command::SetRoutedCallback {
+                node,
+                event,
+                callback,
+            } => {
+                let mut callbacks = self.routed_callbacks.borrow_mut();
+                if let Some(callback) = callback {
+                    callbacks.insert((*node, *event), callback.clone());
+                } else {
+                    callbacks.remove(&(*node, *event));
+                }
+            }
         }
         Ok(())
     }
@@ -2529,6 +3037,10 @@ impl WinUiRuntime {
         let collection = slot_collection(parent, slot)?;
         let child: windows_core::IInspectable = self.ui_element(child)?.into();
         let selection = selection_for_slot(slot);
+        let selected = selection
+            .map(|selection| selected_item(parent, selection))
+            .transpose()?
+            .flatten();
         let retained = self.retained_identities(parent_id, Some(slot))?;
         let current = (0..collection.Size()?)
             .map(|index| {
@@ -2540,10 +3052,12 @@ impl WinUiRuntime {
         let result = self.with_controlled_collection_preserved(parent_id, parent, slot, || {
             self.with_selection_suppressed(selection.map(|_| (parent_id, slot)), || {
                 collection.InsertAt(index32(index)?, &child)?;
-                if let Some(selection) = selection
-                    && selection_item_is_selected(selection, &child)?
-                {
-                    set_selected_item(parent, selection, &child)?;
+                if let Some(selection) = selection {
+                    if selection_item_is_selected(selection, &child)? {
+                        set_selected_item(parent, selection, &child)?;
+                    } else if let Some(selected) = selected.as_ref() {
+                        set_selected_item(parent, selection, selected)?;
+                    }
                 }
                 Ok(())
             })
@@ -2570,10 +3084,21 @@ impl WinUiRuntime {
         let collection = slot_collection(parent, slot)?;
         let child: windows_core::IInspectable = self.ui_element(child)?.into();
         let selection = selection_for_slot(slot);
+        let selected = selection
+            .map(|selection| selected_item(parent, selection))
+            .transpose()?
+            .flatten();
         let result = self.with_controlled_collection_preserved(parent_id, parent, slot, || {
             self.with_selection_suppressed(selection.map(|_| (parent_id, slot)), || {
                 let index = inspectable_child_index(&collection, child_id, &child)?;
-                collection.RemoveAt(index)
+                collection.RemoveAt(index)?;
+                if let Some(selection) = selection
+                    && let Some(selected) = selected.as_ref()
+                    && selected != &child
+                {
+                    set_selected_item(parent, selection, selected)?;
+                }
+                Ok(())
             })
         });
         if result.is_ok() {
@@ -2605,12 +3130,10 @@ impl WinUiRuntime {
             .flatten();
         let collection = slot_collection(parent, slot)?;
         let child: windows_core::IInspectable = self.ui_element(child)?.into();
-        let restore_selection = match selection {
-            Some(selection) => {
-                selected.as_ref() == Some(&child) || selection_item_is_selected(selection, &child)?
-            }
-            None => false,
-        };
+        let child_selected = selection
+            .map(|selection| selection_item_is_selected(selection, &child))
+            .transpose()?
+            .unwrap_or(false);
         let child_identity = com_identity(&child)?;
         let retained = self.retained_identities(parent_id, Some(slot))?;
         let current = (0..collection.Size()?)
@@ -2628,8 +3151,12 @@ impl WinUiRuntime {
                 let from = inspectable_child_index(&collection, child_id, &child)?;
                 collection.RemoveAt(from)?;
                 collection.InsertAt(index32(index)?, &child)?;
-                if restore_selection {
-                    set_selected_item(parent, selection.unwrap(), &child)?;
+                if let Some(selection) = selection {
+                    if child_selected {
+                        set_selected_item(parent, selection, &child)?;
+                    } else if let Some(selected) = selected.as_ref() {
+                        set_selected_item(parent, selection, selected)?;
+                    }
                 }
                 Ok(())
             })
@@ -2694,10 +3221,12 @@ impl WinUiRuntime {
             .collect::<Vec<_>>();
         let retained = retained_subsequence(&current_ids, &target_ids);
         let restore_selection = selected.as_ref().is_some_and(|selected| {
-            current
-                .iter()
-                .any(|(identity, item)| !retained.contains(identity) && item == selected)
-                && desired.iter().any(|(_, _, item)| item == selected)
+            let selected_in_current = current.iter().any(|(_, item)| item == selected);
+            !selected_in_current
+                || current
+                    .iter()
+                    .any(|(identity, item)| !retained.contains(identity) && item == selected)
+                    && desired.iter().any(|(_, _, item)| item == selected)
         });
 
         let result = self.with_controlled_collection_preserved(parent_id, parent, slot, || {
@@ -2958,8 +3487,11 @@ impl WinUiRuntime {
             drop_policies: Rc::clone(&self.drop_policies),
             encoded_image_nodes: Rc::clone(&self.encoded_image_nodes),
             feedback: Rc::clone(&self.feedback),
+            rich_edit_feedback: Rc::clone(&self.rich_edit_feedback),
             content_dialogs: Rc::clone(&self.content_dialogs),
-            pointer_capture: Rc::clone(&self.pointer_capture),
+            pending_focus_states: Rc::clone(&self.pending_focus_states),
+            pointer_policies: Rc::clone(&self.pointer_policies),
+            routed_callbacks: Rc::clone(&self.routed_callbacks),
             selection_items: Rc::clone(&self.selection_items),
             dispatcher,
             identity,
@@ -2974,6 +3506,21 @@ impl WinUiRuntime {
 
     pub fn close_scheduler(&self) {
         self.scheduler.borrow_mut().close();
+    }
+
+    fn set_rich_edit_text(&self, node: NodeId, value: &PropertyValue) -> Result<(), RuntimeError> {
+        let PropertyValue::Str(value) = value else {
+            return Err(RuntimeError::UnsupportedKind);
+        };
+        let Some(Handle::RichEditBox(control)) = self.handles.get(&node) else {
+            return Err(RuntimeError::MissingNode(node));
+        };
+        if set_rich_edit_text(control, value)? {
+            self.rich_edit_feedback
+                .borrow_mut()
+                .insert(node, value.clone());
+        }
+        Ok(())
     }
 
     fn with_controlled_collection_preserved(
@@ -3040,8 +3587,11 @@ pub struct EventSink {
     drop_policies: Rc<RefCell<HashMap<NodeId, DragDropPolicy>>>,
     encoded_image_nodes: Rc<RefCell<HashSet<NodeId>>>,
     feedback: Rc<RefCell<HashMap<(NodeId, EventId), FeedbackExpectation>>>,
+    rich_edit_feedback: Rc<RefCell<HashMap<NodeId, String>>>,
     content_dialogs: Rc<RefCell<ContentDialogScheduler>>,
-    pointer_capture: Rc<RefCell<HashMap<NodeId, bool>>>,
+    pending_focus_states: Rc<RefCell<HashMap<NodeId, ElementFocusState>>>,
+    pointer_policies: Rc<RefCell<HashMap<NodeId, PointerInteractionPolicy>>>,
+    routed_callbacks: Rc<RefCell<HashMap<(NodeId, EventId), RoutedEventCallback>>>,
     selection_items: Rc<RefCell<Vec<(NodeId, windows_core::IInspectable)>>>,
     dispatcher: DispatcherQueue,
     identity: WindowToken,
@@ -3129,13 +3679,16 @@ impl EventSink {
         }
     }
 
-    pub fn capture_pointer_on_press(
+    pub fn apply_pointer_press_policy(
         &self,
         node: NodeId,
         element: &UIElement,
         args: windows_core::InRef<'_, PointerRoutedEventArgs>,
     ) -> Result<bool, RuntimeError> {
-        if !self.pointer_capture.borrow().contains_key(&node) {
+        let Some(policy) = self.pointer_policies.borrow().get(&node).copied() else {
+            return Ok(false);
+        };
+        if !policy.capture {
             return Ok(false);
         }
         let Some(args) = args.as_ref() else {
@@ -3145,22 +3698,85 @@ impl EventSink {
         element.CapturePointer(&pointer).map_err(native_error)
     }
 
-    pub fn release_pointer_after_event(
+    pub fn apply_pointer_release_policy(
         &self,
         node: NodeId,
+        event: EventId,
+        revision: u32,
         element: &UIElement,
         args: windows_core::InRef<'_, PointerRoutedEventArgs>,
     ) -> Result<(), RuntimeError> {
-        if !self.pointer_capture.borrow().contains_key(&node) {
-            return Ok(());
-        }
-        let Some(args) = args.as_ref() else {
+        let Some(policy) = self.pointer_policies.borrow().get(&node).copied() else {
             return Ok(());
         };
-        let pointer = args.Pointer().map_err(native_error)?;
-        element
-            .ReleasePointerCapture(&pointer)
-            .map_err(native_error)
+        if policy.capture
+            && let Some(args) = args.as_ref()
+        {
+            let pointer = args.Pointer().map_err(native_error)?;
+            element
+                .ReleasePointerCapture(&pointer)
+                .map_err(native_error)?;
+        }
+        if policy.focus_on_release {
+            let sink = self.clone();
+            let element = element.clone();
+            let handler = DispatcherQueueHandler::new(move || {
+                if sink.current_identity.get() != Some(sink.identity)
+                    || !sink
+                        .pointer_policies
+                        .borrow()
+                        .get(&node)
+                        .is_some_and(|policy| policy.focus_on_release)
+                {
+                    return;
+                }
+                sink.pending_focus_states
+                    .borrow_mut()
+                    .insert(node, ElementFocusState::Pointer);
+                match element.Focus(FocusState::Pointer).map_err(native_error) {
+                    Ok(true) => {
+                        let pending = Rc::clone(&sink.pending_focus_states);
+                        let cleanup = DispatcherQueueHandler::new(move || {
+                            pending.borrow_mut().remove(&node);
+                        });
+                        match sink
+                            .dispatcher
+                            .TryEnqueueWithPriority(DispatcherQueuePriority::Low, &cleanup)
+                            .map_err(native_error)
+                        {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                sink.pending_focus_states.borrow_mut().remove(&node);
+                                sink.error(node, event, revision, RuntimeError::DispatcherRejected);
+                            }
+                            Err(error) => {
+                                sink.pending_focus_states.borrow_mut().remove(&node);
+                                sink.error(node, event, revision, error);
+                            }
+                        }
+                    }
+                    Ok(false) => {
+                        sink.pending_focus_states.borrow_mut().remove(&node);
+                    }
+                    Err(error) => {
+                        sink.pending_focus_states.borrow_mut().remove(&node);
+                        sink.error(node, event, revision, error);
+                    }
+                }
+            });
+            let accepted = self
+                .dispatcher
+                .TryEnqueueWithPriority(DispatcherQueuePriority::Normal, &handler)
+                .map_err(native_error)?;
+            if !accepted {
+                return Err(RuntimeError::DispatcherRejected);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn take_pending_focus_state(&self, node: NodeId) -> Option<ElementFocusState> {
+        self.pending_focus_states.borrow_mut().remove(&node)
     }
 
     fn content_dialog_root_ready(
@@ -3187,6 +3803,26 @@ impl EventSink {
             .borrow()
             .iter()
             .find_map(|(node, item)| (item == selected).then_some(*node))
+    }
+
+    pub fn enqueue_rich_edit_text(
+        &self,
+        node: NodeId,
+        event: EventId,
+        revision: u32,
+        value: String,
+    ) {
+        let mut feedback = self.rich_edit_feedback.borrow_mut();
+        let suppress = feedback
+            .get(&node)
+            .is_some_and(|expected| expected == &value);
+        if !suppress {
+            feedback.remove(&node);
+        }
+        drop(feedback);
+        if !suppress {
+            self.enqueue(node, event, revision, EventPayload::Str(value));
+        }
     }
 
     pub fn enqueue(&self, node: NodeId, event: EventId, revision: u32, payload: EventPayload) {
@@ -3217,6 +3853,76 @@ impl EventSink {
             work: QueuedEvent::new(node, event, revision, payload),
         });
         self.schedule();
+    }
+
+    pub fn route_key(
+        &self,
+        node: NodeId,
+        event: EventId,
+        revision: u32,
+        value: KeyEventInfo,
+    ) -> bool {
+        self.route(
+            node,
+            event,
+            revision,
+            EventPayload::KeyEventInfo(value),
+            |callback| callback.key(value),
+        )
+    }
+
+    pub fn route_character(
+        &self,
+        node: NodeId,
+        event: EventId,
+        revision: u32,
+        value: CharacterEventInfo,
+    ) -> bool {
+        self.route(
+            node,
+            event,
+            revision,
+            EventPayload::CharacterEventInfo(value),
+            |callback| callback.character(value),
+        )
+    }
+
+    fn route(
+        &self,
+        node: NodeId,
+        event: EventId,
+        revision: u32,
+        payload: EventPayload,
+        invoke: impl FnOnce(&RoutedEventCallback) -> Option<RoutedDispatch>,
+    ) -> bool {
+        if self.current_identity.get() != Some(self.identity) {
+            return false;
+        }
+        let callback = self.routed_callbacks.borrow().get(&(node, event)).cloned();
+        let Some(callback) = callback else {
+            return false;
+        };
+        let dispatch =
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| invoke(&callback))) {
+                Ok(Some(dispatch)) => dispatch,
+                Ok(None) => return false,
+                Err(_) => std::process::abort(),
+            };
+        if let Some(message) = dispatch.message {
+            self.queue.borrow_mut().push(NativeWork {
+                identity: self.identity,
+                work: QueuedEvent::routed(
+                    node,
+                    event,
+                    revision,
+                    payload,
+                    message,
+                    dispatch.handled,
+                ),
+            });
+            self.schedule();
+        }
+        dispatch.handled
     }
 
     pub fn observe(&self, node: NodeId, event: EventId, revision: u32, payload: EventPayload) {
@@ -3471,7 +4177,6 @@ fn child_index(
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
 
 fn inspectable_child_index(
@@ -3551,6 +4256,7 @@ impl NativeRuntime for WinUiRuntime {
                 continue;
             }
             if let Err(error) = self.apply_one(command) {
+                self.routed_callbacks.borrow_mut().clear();
                 eprintln!("windows-reactor failed command {index}: {command:?}: {error:?}");
                 return Err(NativeApplyError {
                     command: index,
@@ -3566,6 +4272,23 @@ impl NativeRuntime for WinUiRuntime {
 
     fn open_windows(&mut self, roots: Vec<View>) -> Result<(), RuntimeError> {
         open_live_windows(roots)
+    }
+
+    fn window_handle(&self, node: NodeId) -> Result<isize, RuntimeError> {
+        let window = self
+            .windows
+            .get(&node)
+            .ok_or(RuntimeError::MissingNode(node))?;
+        let mut hwnd = std::ptr::null_mut();
+        unsafe {
+            window
+                .cast::<IWindowNative>()
+                .map_err(native_error)?
+                .WindowHandle(&mut hwnd)
+                .ok()
+                .map_err(native_error)?;
+        }
+        Ok(hwnd as isize)
     }
 
     fn reset(&mut self) {
@@ -3631,8 +4354,11 @@ impl NativeRuntime for WinUiRuntime {
         self.events.borrow_mut().clear();
         self.host_events.borrow_mut().clear();
         self.feedback.borrow_mut().clear();
+        self.rich_edit_feedback.borrow_mut().clear();
         self.drop_policies.borrow_mut().clear();
-        self.pointer_capture.borrow_mut().clear();
+        self.pending_focus_states.borrow_mut().clear();
+        self.pointer_policies.borrow_mut().clear();
+        self.routed_callbacks.borrow_mut().clear();
         self.resource_override_keys.clear();
         self.controlled_collection_indices.clear();
         self.selection_owners.clear();
@@ -4013,6 +4739,10 @@ impl WinUiRuntime {
 
     fn remove_node_state(&mut self, node: NodeId) -> Result<(), RuntimeError> {
         self.release_encoded_image_source(node);
+        self.feedback
+            .borrow_mut()
+            .retain(|(feedback_node, _), _| *feedback_node != node);
+        self.rich_edit_feedback.borrow_mut().remove(&node);
         self.subscriptions
             .retain(|(subscription_node, _), _| *subscription_node != node);
         self.cancel_async_for_node(node);
@@ -4032,7 +4762,11 @@ impl WinUiRuntime {
         self.observation_subscriptions
             .retain(|(subscription_node, _), _| *subscription_node != node);
         self.drop_policies.borrow_mut().remove(&node);
-        self.pointer_capture.borrow_mut().remove(&node);
+        self.pending_focus_states.borrow_mut().remove(&node);
+        self.pointer_policies.borrow_mut().remove(&node);
+        self.routed_callbacks
+            .borrow_mut()
+            .retain(|(callback_node, _), _| *callback_node != node);
         if self.resource_override_keys.contains_key(&node) {
             self.clear_resource_overrides(node)?;
         }
@@ -4164,6 +4898,85 @@ fn native_drag_operation(operation: DragDropOperation) -> DataPackageOperation {
         DragDropOperation::Move => DataPackageOperation::Move,
         DragDropOperation::Link => DataPackageOperation::Link,
     }
+}
+
+fn input_modifiers() -> windows_core::Result<InputModifiers> {
+    let mut keys = [0u8; 256];
+    if !unsafe { GetKeyboardState(keys.as_mut_ptr()) }.as_bool() {
+        return Err(windows_core::Error::from_thread());
+    }
+    let mut modifiers = InputModifiers::NONE;
+    if keys[0x10] & 0x80 != 0 {
+        modifiers |= InputModifiers::SHIFT;
+    }
+    if keys[0x11] & 0x80 != 0 {
+        modifiers |= InputModifiers::CONTROL;
+    }
+    if keys[0x12] & 0x80 != 0 {
+        modifiers |= InputModifiers::ALT;
+    }
+    if keys[0x5b] & 0x80 != 0 || keys[0x5c] & 0x80 != 0 {
+        modifiers |= InputModifiers::WINDOWS;
+    }
+    Ok(modifiers)
+}
+
+fn physical_key_status(value: CorePhysicalKeyStatus) -> PhysicalKeyStatus {
+    PhysicalKeyStatus {
+        repeat_count: value.repeat_count,
+        scan_code: value.scan_code,
+        is_extended: value.is_extended_key,
+        is_menu_down: value.is_menu_key_down,
+        was_down: value.was_key_down,
+        is_released: value.is_key_released,
+    }
+}
+
+fn key_event_info(args: &KeyRoutedEventArgs) -> windows_core::Result<KeyEventInfo> {
+    Ok(KeyEventInfo {
+        key: ReactorVirtualKey(args.Key()?.0 as u32),
+        original_key: ReactorVirtualKey(args.OriginalKey()?.0 as u32),
+        status: physical_key_status(args.KeyStatus()?),
+        modifiers: input_modifiers()?,
+    })
+}
+
+fn character_event_info(
+    args: &CharacterReceivedRoutedEventArgs,
+) -> windows_core::Result<CharacterEventInfo> {
+    Ok(CharacterEventInfo {
+        character: args.Character()?,
+        status: physical_key_status(args.KeyStatus()?),
+        modifiers: input_modifiers()?,
+    })
+}
+
+fn focus_event_info(
+    element: &UIElement,
+    args: &RoutedEventArgs,
+    pending_focus_state: Option<ElementFocusState>,
+    got_focus: bool,
+) -> windows_core::Result<FocusEventInfo> {
+    let original = args.OriginalSource()?;
+    let element_identity: &windows_core::IUnknown = element.into();
+    let original_identity: &windows_core::IUnknown = (&original).into();
+    let is_direct = element_identity == original_identity;
+    let state = if got_focus {
+        // FocusState can still describe the previous state while GotFocus is being raised.
+        if let Some(state) = pending_focus_state {
+            state
+        } else {
+            match element.FocusState()? {
+                FocusState::Pointer => ElementFocusState::Pointer,
+                FocusState::Keyboard => ElementFocusState::Keyboard,
+                FocusState::Programmatic => ElementFocusState::Programmatic,
+                _ => ElementFocusState::Unfocused,
+            }
+        }
+    } else {
+        ElementFocusState::Unfocused
+    };
+    Ok(FocusEventInfo { state, is_direct })
 }
 
 fn native_error(error: windows_core::Error) -> RuntimeError {
@@ -4314,8 +5127,26 @@ pub fn initialize_ui_thread() -> windows_core::Result<()> {
     result.ok()
 }
 
+pub fn exit_application() -> windows_core::Result<()> {
+    let result = Application::Current().and_then(|application| application.Exit());
+    if result.is_err() {
+        unsafe {
+            PostQuitMessage(0);
+        }
+    }
+    result
+}
+
 pub fn exit_ui_thread() {
-    unsafe {
-        PostQuitMessage(0);
+    let handler = DispatcherQueueHandler::new(|| {
+        _ = exit_application();
+    });
+    let queued = DispatcherQueue::GetForCurrentThread().and_then(|dispatcher| {
+        dispatcher.TryEnqueueWithPriority(DispatcherQueuePriority::High, &handler)
+    });
+    if !matches!(queued, Ok(true)) {
+        unsafe {
+            PostQuitMessage(0);
+        }
     }
 }

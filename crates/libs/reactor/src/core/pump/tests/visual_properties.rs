@@ -1,5 +1,4 @@
-use super::super::*;
-use crate::test::RecordingRuntime;
+use super::*;
 
 fn visual_view(styled: bool) -> View {
     let border = Border::new();
@@ -223,7 +222,7 @@ fn failed_visual_update_does_not_publish_struct_values() {
             .native(border)
             .properties
             .get(&PropertyId::BorderPadding),
-        Some(&Some(PropertyValue::Thickness(Thickness::uniform(24.0))))
+        Some(&PropertyValue::Thickness(Thickness::uniform(24.0)))
     );
 }
 

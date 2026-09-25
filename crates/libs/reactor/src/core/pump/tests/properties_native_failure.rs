@@ -1,7 +1,6 @@
 //! Property publication and fatal native-failure contract tests.
 
-use super::super::*;
-use super::support::*;
+use super::*;
 
 #[test]
 fn successful_property_updates_publish_known_values() {
@@ -22,7 +21,7 @@ fn successful_property_updates_publish_known_values() {
             .native(root)
             .properties
             .get(&PropertyId::TextBlockText),
-        Some(&Some(PropertyValue::Str("second".into())))
+        Some(&PropertyValue::Str("second".into()))
     );
 
     pump.update(TextBlock::new().into()).unwrap();
@@ -31,6 +30,13 @@ fn successful_property_updates_publish_known_values() {
             .node(root)
             .unwrap()
             .property(PropertyId::TextBlockText),
+        None
+    );
+    assert_eq!(
+        pump.tree
+            .native(root)
+            .properties
+            .get(&PropertyId::TextBlockText),
         None
     );
 }

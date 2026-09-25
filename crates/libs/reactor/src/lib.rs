@@ -10,8 +10,6 @@ mod reference;
 pub mod test;
 
 use generated::*;
-#[cfg(test)]
-pub(crate) use test::*;
 
 pub use app::*;
 pub use core::public::*;
@@ -20,6 +18,6 @@ pub use generated::public::*;
 pub use reference::{
     CompositionHostError, CompositionHostEvent, ElementObservation, ElementRef, FocusControl,
     FocusError, ImageSourceError, IntegrationError, ReferenceControl, SwapChainPanelError,
-    SwapChainPanelEvent, WebView2Error, WindowRef,
+    SwapChainPanelEvent, WebView2Error, WindowHandle, WindowRef,
 };
 pub use windows_time::{DateTime, TimeSpan};

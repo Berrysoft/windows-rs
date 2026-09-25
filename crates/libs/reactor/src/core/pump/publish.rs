@@ -6,6 +6,7 @@ impl<R: NativeRuntime> Pump<R> {
         self.events.clear();
         self.host_events.clear();
         self.realizations.clear();
+        self.window_operation = None;
     }
 
     pub(super) fn fail_component_candidate(
@@ -46,6 +47,52 @@ impl<R: NativeRuntime> Pump<R> {
         }
     }
 
+    pub(crate) fn process_window_operations(&mut self) -> Result<usize, PumpError> {
+        if self.poisoned {
+            return Err(PumpError::Poisoned);
+        }
+        let Some((window, operation)) = self.window_operation.take() else {
+            return Ok(0);
+        };
+        if !self.components.contains(operation.owner()) {
+            return Ok(0);
+        }
+        let hwnd = match self.runtime.window_handle(window) {
+            Ok(hwnd) => hwnd,
+            Err(error) => {
+                let error = PumpError::WindowHandleFailed(error);
+                self.fail_stop();
+                return Err(error);
+            }
+        };
+        operation.run(hwnd);
+        Ok(1)
+    }
+
+    fn queue_window_operation(&mut self, operation: Option<(NodeId, WindowOperation)>) {
+        if let Some(operation) = operation {
+            if !self.components.contains(operation.1.owner()) {
+                return;
+            }
+            assert!(self.window_operation.is_none());
+            self.window_operation = Some(operation);
+        }
+    }
+
+    fn discard_window_operation(&mut self) {
+        self.window_operation = None;
+    }
+
+    fn apply_post_publish_commands(
+        &mut self,
+        commands: &[Command],
+        operation: Option<(NodeId, WindowOperation)>,
+    ) -> Result<(), PumpError> {
+        self.apply_native_commands(commands)?;
+        self.queue_window_operation(operation);
+        Ok(())
+    }
+
     pub(super) fn publish_candidate(
         &mut self,
         mut candidate: CandidateState,
@@ -77,7 +124,7 @@ impl<R: NativeRuntime> Pump<R> {
             return Err(error);
         }
 
-        self.commit_candidate_properties(&mut candidate, &plan.commits);
+        self.commit_candidate_properties(&mut candidate, plan.commands);
         self.commit_candidate_references(&mut candidate, &plan.reference_commits);
         self.publish_frontend(candidate, &changes, &plan.reference_commits);
         self.diagnostics.extend(plan.diagnostics);
@@ -87,8 +134,12 @@ impl<R: NativeRuntime> Pump<R> {
         self.apply_window_opens(plan.post_publish_windows);
         if commits_window_close {
             self.components.commit_window_close();
+            self.discard_window_operation();
         }
-        self.apply_native_commands(&plan.post_publish_commands)
+        self.apply_post_publish_commands(
+            &plan.post_publish_commands,
+            plan.post_publish_window_operation,
+        )
     }
 
     fn publish_frontend(

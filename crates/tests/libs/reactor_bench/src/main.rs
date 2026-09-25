@@ -39,6 +39,14 @@ struct MemoryRow {
     bytes_per_scope: f64,
 }
 
+struct NativeMemoryRow {
+    name: &'static str,
+    allocations: u64,
+    n: usize,
+    bytes: u64,
+    bytes_per_element: f64,
+}
+
 #[derive(Clone)]
 struct LeafInput {
     sender: Rc<RefCell<Option<LocalSender<bool>>>>,
@@ -52,6 +60,77 @@ impl PartialEq for LeafInput {
 
 struct BenchLeaf {
     active: bool,
+}
+
+struct BenchNotepad {
+    text: String,
+}
+
+struct BenchRoutedInput {
+    events: u64,
+}
+
+struct BenchQueuedInput {
+    events: u64,
+}
+
+impl Component for BenchQueuedInput {
+    type Input = ();
+    type Message = PointerEventInfo;
+
+    fn create(_input: &Self::Input, _context: &ComponentContext<Self>) -> Self {
+        Self { events: 0 }
+    }
+
+    fn update(&mut self, _message: Self::Message, _context: &ComponentContext<Self>) {
+        self.events += 1;
+    }
+
+    fn view(&self, _input: &Self::Input, context: &mut ViewContext<Self>) -> View {
+        Border::new().on_pointer_pressed(context.forward()).into()
+    }
+}
+
+impl Component for BenchRoutedInput {
+    type Input = ();
+    type Message = KeyEventInfo;
+
+    fn create(_input: &Self::Input, _context: &ComponentContext<Self>) -> Self {
+        Self { events: 0 }
+    }
+
+    fn update(&mut self, _message: Self::Message, _context: &ComponentContext<Self>) {
+        self.events += 1;
+    }
+
+    fn view(&self, _input: &Self::Input, context: &mut ViewContext<Self>) -> View {
+        Border::new()
+            .is_tab_stop(true)
+            .on_preview_key_down(context.routed_callback(RoutedMessage::handled))
+            .into()
+    }
+}
+
+impl Component for BenchNotepad {
+    type Input = ();
+    type Message = String;
+
+    fn create(_input: &Self::Input, _context: &ComponentContext<Self>) -> Self {
+        Self {
+            text: String::new(),
+        }
+    }
+
+    fn update(&mut self, message: Self::Message, _context: &ComponentContext<Self>) {
+        self.text = message;
+    }
+
+    fn view(&self, _input: &Self::Input, context: &mut ViewContext<Self>) -> View {
+        TextBox::new()
+            .text(self.text.clone())
+            .on_text_changed(context.forward())
+            .into()
+    }
 }
 
 enum BackgroundMessage {
@@ -688,6 +767,60 @@ fn keyed_stack(keys: &[String]) -> View {
     )
 }
 
+fn border_stack(count: usize, properties: usize) -> View {
+    StackPanel::new().keyed_children((0..count).map(|index| {
+        let border = Border::new();
+        let border = if properties >= 1 {
+            border.is_tab_stop(true)
+        } else {
+            border
+        };
+        let border = if properties >= 2 {
+            border.padding(4.0)
+        } else {
+            border
+        };
+        let border = if properties >= 3 {
+            border.border_thickness(1.0)
+        } else {
+            border
+        };
+        let border = if properties >= 4 {
+            border.corner_radius(2.0)
+        } else {
+            border
+        };
+        KeyedView::new(index, border)
+    }))
+}
+
+fn border_event_stack(count: usize, events: usize) -> View {
+    StackPanel::new().keyed_children((0..count).map(|index| {
+        let border = Border::new();
+        let border = if events >= 1 {
+            border.on_pointer_pressed(|_| {})
+        } else {
+            border
+        };
+        let border = if events >= 2 {
+            border.on_pointer_moved(|_| {})
+        } else {
+            border
+        };
+        let border = if events >= 3 {
+            border.on_pointer_entered(|_| {})
+        } else {
+            border
+        };
+        let border = if events >= 4 {
+            border.on_pointer_exited(|_| {})
+        } else {
+            border
+        };
+        KeyedView::new(index, border)
+    }))
+}
+
 fn virtual_list(key_revision: u64, key_prefix: &str, text_prefix: &str, count: usize) -> View {
     let key_prefix = key_prefix.to_string();
     let text_prefix = text_prefix.to_string();
@@ -892,6 +1025,127 @@ fn bench_component_leaf(count: usize, iters: u64, reps: u32) -> Row {
     Row {
         name: "component_leaf",
         n: count,
+        perf,
+    }
+}
+
+fn bench_textbox_input(size: usize, iters: u64, reps: u32) -> Row {
+    let mut runtime = RecordingRuntime::default();
+    runtime.record_commands(true);
+    let mut pump = Pump::new(runtime);
+    pump.mount_view(View::component::<BenchNotepad>(()))
+        .unwrap();
+    let node = pump
+        .runtime()
+        .commands()
+        .iter()
+        .flatten()
+        .find_map(|command| match command {
+            Command::Create { node, .. } => Some(*node),
+            _ => None,
+        })
+        .unwrap();
+    let revision = pump
+        .event_revision(node, EventId::TextBoxTextChanged)
+        .unwrap();
+    pump.runtime_mut().record_commands(false);
+    let first = "a".repeat(size);
+    let second = "b".repeat(size);
+    let mut value = false;
+    let perf = measure(iters, reps, || {
+        let text = if value { &first } else { &second };
+        pump.queue_event(QueuedEvent::new(
+            node,
+            EventId::TextBoxTextChanged,
+            revision,
+            EventPayload::Str(text.clone()),
+        ));
+        assert_eq!(pump.dispatch_events(), Ok(1));
+        assert_eq!(pump.dispatch_components(1), Ok(1));
+        value = !value;
+    });
+    Row {
+        name: "textbox_input",
+        n: size,
+        perf,
+    }
+}
+
+fn bench_routed_key_input(iters: u64, reps: u32) -> Row {
+    let mut runtime = RecordingRuntime::default();
+    runtime.record_commands(true);
+    let mut pump = Pump::new(runtime);
+    pump.mount_view(View::component::<BenchRoutedInput>(()))
+        .unwrap();
+    let node = pump
+        .runtime()
+        .commands()
+        .iter()
+        .flatten()
+        .find_map(|command| match command {
+            Command::Create { node, .. } => Some(*node),
+            _ => None,
+        })
+        .unwrap();
+    let revision = pump
+        .event_revision(node, EventId::BorderPreviewKeyDown)
+        .unwrap();
+    pump.runtime_mut().record_commands(false);
+    let event = KeyEventInfo {
+        key: VirtualKey::A,
+        original_key: VirtualKey::A,
+        status: PhysicalKeyStatus::default(),
+        modifiers: InputModifiers::CONTROL,
+    };
+    let perf = measure(iters, reps, || {
+        assert!(
+            pump.runtime_mut()
+                .route_key(node, EventId::BorderPreviewKeyDown, revision, event,)
+        );
+        assert_eq!(pump.dispatch_events(), Ok(1));
+        assert_eq!(pump.dispatch_components(1), Ok(1));
+    });
+    Row {
+        name: "routed_key_input",
+        n: 1,
+        perf,
+    }
+}
+
+fn bench_queued_pointer_input(iters: u64, reps: u32) -> Row {
+    let mut runtime = RecordingRuntime::default();
+    runtime.record_commands(true);
+    let mut pump = Pump::new(runtime);
+    pump.mount_view(View::component::<BenchQueuedInput>(()))
+        .unwrap();
+    let node = pump
+        .runtime()
+        .commands()
+        .iter()
+        .flatten()
+        .find_map(|command| match command {
+            Command::Create { node, .. } => Some(*node),
+            _ => None,
+        })
+        .unwrap();
+    let revision = pump
+        .event_revision(node, EventId::BorderPointerPressed)
+        .unwrap();
+    pump.runtime_mut().record_commands(false);
+    let event = PointerEventInfo::default();
+    let perf = measure(iters, reps, || {
+        pump.queue_event(QueuedEvent::new(
+            node,
+            EventId::BorderPointerPressed,
+            revision,
+            EventPayload::PointerEventInfo(event),
+        ));
+        assert_eq!(pump.dispatch_events(), Ok(1));
+        assert_eq!(pump.dispatch_components(1), Ok(1));
+    });
+    Row {
+        name: "queued_pointer_input",
+        n: 1,
         perf,
     }
 }
@@ -1119,6 +1373,27 @@ fn measure_effect_component_memory(count: usize) -> MemoryRow {
     }
 }
 
+fn measure_native_memory(
+    name: &'static str,
+    count: usize,
+    view: impl FnOnce() -> View,
+) -> NativeMemoryRow {
+    let mut pump = Pump::new(runtime());
+    let before = allocator::CURRENT_BYTES.load(Ordering::Relaxed);
+    let allocations = allocator::ALLOCATIONS.load(Ordering::Relaxed);
+    pump.mount_view(view()).unwrap();
+    let bytes = allocator::CURRENT_BYTES.load(Ordering::Relaxed) - before;
+    let allocations = allocator::ALLOCATIONS.load(Ordering::Relaxed) - allocations;
+    pump.shutdown();
+    NativeMemoryRow {
+        name,
+        allocations,
+        n: count,
+        bytes,
+        bytes_per_element: bytes as f64 / count as f64,
+    }
+}
+
 fn parse_arg(name: &str, default: u64) -> u64 {
     let args: Vec<String> = std::env::args().collect();
     args.windows(2)
@@ -1178,6 +1453,48 @@ fn main() {
         ),
         bench_textbox_mount(512, (iters / 16).max(1), reps),
         bench_reference_mount(512, (iters / 16).max(1), reps),
+        bench_mount_shutdown(
+            "border_mount_0",
+            512,
+            border_stack(512, 0),
+            (iters / 16).max(1),
+            reps,
+        ),
+        bench_mount_shutdown(
+            "border_mount_1",
+            512,
+            border_stack(512, 1),
+            (iters / 16).max(1),
+            reps,
+        ),
+        bench_mount_shutdown(
+            "border_mount_2",
+            512,
+            border_stack(512, 2),
+            (iters / 16).max(1),
+            reps,
+        ),
+        bench_mount_shutdown(
+            "border_mount_4",
+            512,
+            border_stack(512, 4),
+            (iters / 16).max(1),
+            reps,
+        ),
+        bench_mount_shutdown(
+            "border_event_1",
+            512,
+            border_event_stack(512, 1),
+            (iters / 16).max(1),
+            reps,
+        ),
+        bench_mount_shutdown(
+            "border_event_4",
+            512,
+            border_event_stack(512, 4),
+            (iters / 16).max(1),
+            reps,
+        ),
         bench_effect_mount(512, (iters / 16).max(1), reps),
         bench_update(
             "update_no_change",
@@ -1258,6 +1575,11 @@ fn main() {
         bench_component_leaf(512, iters, reps),
         bench_component_leaf(4_096, (iters / 4).max(1), reps),
         bench_component_leaf(16_384, (iters / 16).max(1), reps),
+        bench_textbox_input(8, iters, reps),
+        bench_textbox_input(4_096, (iters / 4).max(1), reps),
+        bench_textbox_input(65_536, (iters / 32).max(1), reps),
+        bench_queued_pointer_input(iters, reps),
+        bench_routed_key_input(iters, reps),
         bench_component_keyed(
             "component_same_order",
             512,
@@ -1443,6 +1765,26 @@ fn main() {
         println!(
             "{:>8} {:>8} {:>16} {:>18.1} {:>16}",
             "effect", row.n, row.bytes, row.bytes_per_scope, row.allocations
+        );
+    }
+
+    println!("\nretained native Border memory");
+    println!(
+        "{:<16} {:>8} {:>16} {:>18} {:>16}",
+        "properties", "elements", "retained bytes", "bytes/element", "allocations"
+    );
+    println!("{}", "-".repeat(80));
+    for row in [
+        measure_native_memory("none", 4_096, || border_stack(4_096, 0)),
+        measure_native_memory("one", 4_096, || border_stack(4_096, 1)),
+        measure_native_memory("two", 4_096, || border_stack(4_096, 2)),
+        measure_native_memory("four", 4_096, || border_stack(4_096, 4)),
+        measure_native_memory("one event", 4_096, || border_event_stack(4_096, 1)),
+        measure_native_memory("four events", 4_096, || border_event_stack(4_096, 4)),
+    ] {
+        println!(
+            "{:<16} {:>8} {:>16} {:>18.1} {:>16}",
+            row.name, row.n, row.bytes, row.bytes_per_element, row.allocations
         );
     }
 }
