@@ -105,7 +105,15 @@ impl Param {
             return false;
         }
 
-        if !explicit && ty.is_void() {
+        let is_native_typedef = match &self.ty {
+            Type::PtrConst(ty, ..) | Type::PtrMut(ty, ..) => match &**ty {
+                Type::CppStruct(ty) => ty.is_native_typedef(),
+                _ => false,
+            },
+            _ => false,
+        };
+
+        if !explicit && ty.is_void() && !is_native_typedef {
             return false;
         }
 
