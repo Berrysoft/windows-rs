@@ -53,7 +53,7 @@ rustc-hash = { version = "2" }
 cppwinrt = { version = "0.100.0", path = "crates/libs/cppwinrt", default-features = false }
 windows = { version = "0.100.0", path = "crates/libs/windows", default-features = false }
 windows-animation = { version = "0.100.0", path = "crates/libs/animation", default-features = false }
-windows-bindgen = { version = "0.100.0", path = "crates/libs/bindgen", default-features = false, package = "overrides-windows-bindgen" }
+windows-bindgen = { version = "0.101.0-alpha.1", path = "crates/libs/bindgen", default-features = false, package = "overrides-windows-bindgen" }
 windows-canvas = { version = "0.100.0", path = "crates/libs/canvas", default-features = false }
 windows-clang = { version = "0.100.0", path = "crates/libs/clang", default-features = false }
 windows-collections = { version = "0.100.0", path = "crates/libs/collections", default-features = false }
